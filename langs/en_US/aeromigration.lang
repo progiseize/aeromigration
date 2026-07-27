@@ -1,0 +1,21 @@
+# Module aeromigration
+Module399998Name=Data migration
+Module399998Desc=Data migration from the legacy ERP to Dolibarr
+
+# Administration
+AeroMigSetup=Setup
+AeroMigSetupPageHelp=Migration scripts from the legacy ERP to Dolibarr. Each script creates records through the Dolibarr API so that business rules, numbering and core triggers are preserved.
+AeroMigScript=Migration script
+AeroMigScriptCode=Code
+AeroMigScriptStatus=Status
+AeroMigNoScript=No migration script declared yet.
+AeroMigStatusPending=Pending
+AeroMigScriptThirdparty=Third parties (customers and suppliers)
+AeroMigCliHelp=Migrations are run from the command line, in the module's scripts/ folder: <strong>php migrate.php %s --dry-run</strong>
+
+# About
+AeroMigAboutText=Technical module dedicated to migrating data from the legacy ERP. It adds no table and no field to Dolibarr and does not interfere with its behaviour: it can be disabled once the migration is complete.
+
+# Permissions
+Permission39999801=Read data migration status
+Permission39999802=Run a data migration script

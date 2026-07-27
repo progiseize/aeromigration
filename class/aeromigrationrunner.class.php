@@ -1,0 +1,468 @@
+<?php
+/* Copyright (C) 2026 Progiseize */
+
+/**
+ * \file    custom/aeromigration/class/aeromigrationrunner.class.php
+ * \ingroup aeromigration
+ * \brief   Socle commun des scripts de reprise de données.
+ *
+ * Cette classe abstraite porte tout ce qui est indépendant de l'entité migrée :
+ * parcours de la source par lots, reprise après interruption, idempotence, simulation,
+ * comptage et collecte des erreurs. Une classe fille n'a plus qu'à décrire sa source et
+ * à implémenter migrateRow().
+ *
+ * Trois principes structurent le socle :
+ *
+ * 1. ÉCRITURE VIA L'API DOLIBARR UNIQUEMENT. Les classes filles instancient les objets
+ *    métier (Societe, Contact, Product…) et appellent create()/update(). Le SQL direct
+ *    est réservé à la LECTURE des tables sources, qui ne sont pas des objets Dolibarr.
+ *
+ * 2. IDEMPOTENCE PAR ref_ext. Chaque objet créé porte dans son champ natif ref_ext la
+ *    clé de l'enregistrement source, préfixée (ex : « SAGE:C0001 »). Relancer un script
+ *    ne recrée donc pas ce qui existe déjà, sans avoir besoin d'une table de
+ *    correspondance dédiée. L'index ref_ext -> rowid est chargé une fois en mémoire au
+ *    démarrage, ce qui évite un fetch() par ligne.
+ *
+ * 3. PARCOURS PAR CURSEUR, PAS PAR OFFSET. La source est lue par tranches ordonnées sur
+ *    une colonne entière croissante (WHERE cbMarq > n LIMIT x). Contrairement à
+ *    LIMIT/OFFSET, le coût reste constant quelle que soit la profondeur atteinte, et la
+ *    reprise après interruption se résume à repartir du dernier curseur affiché.
+ */
+abstract class AeroMigrationRunner
+{
+    /** @var DoliDB Handler de base de données */
+    public $db;
+
+    /** @var User Utilisateur au nom duquel les objets Dolibarr sont créés */
+    public $user;
+
+    /** @var string Identifiant court du script, utilisé en ligne de commande */
+    public $code = '';
+
+    /** @var string Clé de traduction du libellé du script */
+    public $label = '';
+
+    // ── Description de la source ───────────────────────────────────────────
+
+    /** @var string Table source lue (tables Sage, sans préfixe llx_) */
+    protected $srcTable = '';
+
+    /** @var string Colonnes sélectionnées */
+    protected $srcFields = '*';
+
+    /**
+     * Colonne de parcours. Doit être unique, indexée et totalement ordonnée : la clé
+     * primaire de la table source est le choix naturel.
+     *
+     * Attention, la colonne technique cbMarq des tables Sage n'est PAS utilisable
+     * partout : selon les tables elle est auto-incrémentée ou constamment nulle. Il faut
+     * la vérifier avant de s'en servir.
+     *
+     * @var string
+     */
+    protected $srcCursorField = '';
+
+    /**
+     * Type de la colonne de parcours : 'int' ou 'string'. Détermine le quotage dans la
+     * clause de reprise.
+     *
+     * @var string
+     */
+    protected $srcCursorType = 'int';
+
+    /** @var string Colonne portant la clé naturelle reportée dans ref_ext */
+    protected $srcKeyField = '';
+
+    /** @var string Filtre SQL additionnel sur la source, sans le mot-clé WHERE */
+    protected $srcWhere = '';
+
+    // ── Description de la cible ────────────────────────────────────────────
+
+    /** @var string Table Dolibarr cible, sans préfixe (ex : societe) */
+    protected $dstTable = '';
+
+    /** @var string Élément Dolibarr, pour getEntity() (ex : societe) */
+    protected $dstElement = '';
+
+    /** @var string Préfixe des ref_ext posés par la reprise */
+    public $refExtPrefix = 'SAGE:';
+
+    // ── Options d'exécution ────────────────────────────────────────────────
+
+    /** @var int Nombre d'enregistrements lus par tranche */
+    public $batchSize = 200;
+
+    /** @var int Nombre maximum d'enregistrements à traiter (0 = pas de limite) */
+    public $limit = 0;
+
+    /** @var bool Simulation : aucune écriture, seuls les compteurs sont alimentés */
+    public $dryrun = false;
+
+    /** @var bool Mettre à jour les objets déjà migrés au lieu de les ignorer */
+    public $updateExisting = false;
+
+    /** @var int|string|null Curseur de départ : reprend là où un passage s'est arrêté */
+    public $startCursor = null;
+
+    /** @var callable|null Rappel de progression, reçoit ($stats, $cursor) après chaque lot */
+    public $progressCallback = null;
+
+    // ── Résultats ──────────────────────────────────────────────────────────
+
+    /** @var array{read:int,created:int,updated:int,skipped:int,error:int} Compteurs */
+    public $stats = array('read' => 0, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'error' => 0);
+
+    /** @var array<int,array{key:string,message:string}> Détail des lignes en échec */
+    public $errors = array();
+
+    /** @var int|string|null Dernier curseur atteint, à réutiliser pour reprendre */
+    public $lastCursor = null;
+
+    /** @var array<string,int> Index ref_ext -> rowid des objets déjà migrés */
+    protected $migratedIndex = array();
+
+    /**
+     * Constructeur.
+     *
+     * @param DoliDB $db   Handler de base de données
+     * @param User   $user Utilisateur au nom duquel les objets sont créés
+     */
+    public function __construct($db, $user)
+    {
+        $this->db   = $db;
+        $this->user = $user;
+    }
+
+    /**
+     * Crée ou met à jour l'objet Dolibarr correspondant à une ligne source.
+     *
+     * L'implémentation ne gère ni la transaction, ni les compteurs, ni le ref_ext :
+     * le socle s'en charge. Elle se contente de construire l'objet et de le persister.
+     * Toute erreur doit être signalée en levant une exception.
+     *
+     * @param stdClass $row        Ligne source
+     * @param int      $existingId rowid de l'objet déjà migré, 0 si création
+     * @return array{action:string,id:int}  action parmi created, updated, skipped
+     * @throws Exception En cas d'échec de création ou de mise à jour
+     */
+    abstract protected function migrateRow($row, $existingId);
+
+    /**
+     * Préparation appelée une fois avant le parcours.
+     *
+     * Point d'extension pour charger les référentiels dont le mapping a besoin (pays,
+     * départements, dictionnaires…), une seule fois plutôt qu'à chaque ligne.
+     *
+     * @return int 1 si OK, <=0 pour interrompre la reprise
+     */
+    protected function prepare()
+    {
+        return 1;
+    }
+
+    /**
+     * Contrôle une ligne source sans rien écrire, en mode simulation.
+     *
+     * Permet à un --dry-run de valider réellement le mapping (résolution des
+     * référentiels, champs obligatoires, valeurs hors nomenclature) au lieu de se
+     * limiter à compter les lignes. Toute anomalie doit être signalée en levant une
+     * exception, exactement comme dans migrateRow().
+     *
+     * @param stdClass $row Ligne source
+     * @return void
+     * @throws Exception Si la ligne ne permet pas de construire un objet valide
+     */
+    protected function validateRow($row)
+    {
+    }
+
+    /**
+     * Informations complémentaires à afficher en fin de passage.
+     *
+     * Permet à une classe fille de remonter ce que les compteurs ne disent pas : valeurs
+     * source non reconnues, cas limites rencontrés, etc.
+     *
+     * @return array<int,string> Lignes de rapport, vide si rien à signaler
+     */
+    public function getReport()
+    {
+        return array();
+    }
+
+    /**
+     * Clé naturelle de la ligne source, reportée dans ref_ext.
+     *
+     * @param stdClass $row Ligne source
+     * @return string       Clé, chaîne vide si la ligne est inexploitable
+     */
+    protected function getSourceKey($row)
+    {
+        $field = $this->srcKeyField;
+
+        return isset($row->$field) ? trim((string) $row->$field) : '';
+    }
+
+    /**
+     * Construit la valeur de ref_ext à partir d'une clé source.
+     *
+     * @param string $key Clé naturelle
+     * @return string     Valeur de ref_ext
+     */
+    public function buildRefExt($key)
+    {
+        return $this->refExtPrefix.$key;
+    }
+
+    /**
+     * Nombre total d'enregistrements à traiter dans la source.
+     *
+     * @return int Nombre de lignes, -1 en cas d'erreur SQL
+     */
+    public function countSource()
+    {
+        $sql = 'SELECT COUNT(*) as nb FROM '.$this->srcTable;
+        if ($this->srcWhere !== '') {
+            $sql .= ' WHERE '.$this->srcWhere;
+        }
+
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
+            return -1;
+        }
+
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+
+        return (int) $obj->nb;
+    }
+
+    /**
+     * Charge en mémoire l'index des objets déjà migrés (ref_ext -> rowid).
+     *
+     * Une seule requête au lieu d'un fetch() par ligne : sur plus de 150 000 tiers,
+     * c'est la différence entre quelques secondes et plusieurs heures. L'empreinte
+     * mémoire reste modeste (de l'ordre de 20 Mo pour 150 000 entrées) ; pour une
+     * source beaucoup plus volumineuse, il faudra passer à une vérification par
+     * tranche.
+     *
+     * @return int Nombre d'entrées chargées, -1 en cas d'erreur SQL
+     */
+    protected function loadMigratedIndex()
+    {
+        $this->migratedIndex = array();
+
+        $sql = 'SELECT rowid, ref_ext FROM '.MAIN_DB_PREFIX.$this->dstTable;
+        $sql .= " WHERE entity IN (".getEntity($this->dstElement).")";
+        $sql .= " AND ref_ext LIKE '".$this->db->escape($this->refExtPrefix)."%'";
+
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
+            return -1;
+        }
+
+        while ($obj = $this->db->fetch_object($resql)) {
+            $this->migratedIndex[$obj->ref_ext] = (int) $obj->rowid;
+        }
+        $this->db->free($resql);
+
+        return count($this->migratedIndex);
+    }
+
+    /**
+     * Lit une tranche de la source à partir d'un curseur.
+     *
+     * @param int|string|null $cursor Dernière valeur de curseur déjà traitée, null au départ
+     * @return array<int,stdClass>|null Lignes lues, null en cas d'erreur SQL
+     */
+    protected function fetchBatch($cursor)
+    {
+        $conditions = array();
+        if ($this->srcWhere !== '') {
+            $conditions[] = '('.$this->srcWhere.')';
+        }
+        // Pas de clause de reprise au premier passage : une comparaison à '' écarterait
+        // silencieusement une éventuelle clé vide.
+        if ($cursor !== null && $cursor !== '') {
+            if ($this->srcCursorType === 'string') {
+                $conditions[] = $this->srcCursorField." > '".$this->db->escape($cursor)."'";
+            } else {
+                $conditions[] = $this->srcCursorField.' > '.((int) $cursor);
+            }
+        }
+
+        $sql  = 'SELECT '.$this->srcFields.' FROM '.$this->srcTable;
+        if ($conditions) {
+            $sql .= ' WHERE '.implode(' AND ', $conditions);
+        }
+        $sql .= ' ORDER BY '.$this->srcCursorField.' ASC';
+        $sql .= ' LIMIT '.((int) $this->batchSize);
+
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
+            return null;
+        }
+
+        $rows = array();
+        while ($obj = $this->db->fetch_object($resql)) {
+            $rows[] = $obj;
+        }
+        $this->db->free($resql);
+
+        return $rows;
+    }
+
+    /**
+     * Exécute la reprise.
+     *
+     * @return int 1 si tout s'est bien passé, -1 si au moins une ligne est en erreur
+     */
+    public function run()
+    {
+        $this->stats  = array('read' => 0, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'error' => 0);
+        $this->errors = array();
+
+        if ($this->prepare() <= 0) {
+            return -1;
+        }
+
+        if ($this->loadMigratedIndex() < 0) {
+            return -1;
+        }
+
+        $cursor    = $this->startCursor;
+        $processed = 0;
+        $stop      = false;
+
+        while (!$stop) {
+            $rows = $this->fetchBatch($cursor);
+            if ($rows === null) {
+                return -1;
+            }
+            if (empty($rows)) {
+                break;
+            }
+
+            foreach ($rows as $row) {
+                $cursorField = $this->srcCursorField;
+                $cursor      = $row->$cursorField;
+
+                $this->stats['read']++;
+                $this->processRow($row);
+                $processed++;
+
+                if ($this->limit > 0 && $processed >= $this->limit) {
+                    $stop = true;
+                    break;
+                }
+            }
+
+            $this->lastCursor = $cursor;
+
+            if (is_callable($this->progressCallback)) {
+                call_user_func($this->progressCallback, $this->stats, $cursor);
+            }
+
+            unset($rows);
+        }
+
+        $this->lastCursor = $cursor;
+
+        return ($this->stats['error'] > 0) ? -1 : 1;
+    }
+
+    /**
+     * Traite une ligne source : décide de l'action, encadre l'écriture et compte.
+     *
+     * Chaque ligne est écrite dans sa propre transaction. Une ligne en échec est
+     * annulée puis enregistrée, et le parcours continue : sur une reprise de masse, on
+     * veut la liste complète des cas à corriger, pas un arrêt à la première anomalie.
+     *
+     * @param stdClass $row Ligne source
+     * @return void
+     */
+    protected function processRow($row)
+    {
+        $key = $this->getSourceKey($row);
+        if ($key === '') {
+            $this->stats['error']++;
+            $this->errors[] = array('key' => '(vide)', 'message' => 'Clé source absente ou vide');
+            return;
+        }
+
+        $refExt     = $this->buildRefExt($key);
+        $existingId = isset($this->migratedIndex[$refExt]) ? $this->migratedIndex[$refExt] : 0;
+
+        // Déjà migré et pas de mise à jour demandée : on passe.
+        if ($existingId > 0 && !$this->updateExisting) {
+            $this->stats['skipped']++;
+            return;
+        }
+
+        // Simulation : le mapping est réellement exécuté, mais rien n'est persisté. Une
+        // ligne qui échouerait à l'écriture est ainsi détectée avant de toucher la base.
+        if ($this->dryrun) {
+            try {
+                $this->validateRow($row);
+            } catch (Exception $e) {
+                $this->stats['error']++;
+                $this->errors[] = array('key' => $key, 'message' => $e->getMessage());
+                return;
+            }
+
+            if ($existingId > 0) {
+                $this->stats['updated']++;
+            } else {
+                $this->stats['created']++;
+            }
+            return;
+        }
+
+        $this->db->begin();
+
+        try {
+            $result = $this->migrateRow($row, $existingId);
+
+            $action = isset($result['action']) ? $result['action'] : 'skipped';
+            $id     = isset($result['id']) ? (int) $result['id'] : 0;
+
+            if ($action === 'created' && $id > 0) {
+                // L'index est tenu à jour en cours de route : si la source contient deux
+                // fois la même clé, le doublon est détecté dès le second passage.
+                $this->migratedIndex[$refExt] = $id;
+            }
+
+            if (!isset($this->stats[$action])) {
+                throw new Exception('Action inconnue retournée par migrateRow() : '.$action);
+            }
+
+            $this->stats[$action]++;
+            $this->db->commit();
+        } catch (Exception $e) {
+            $this->db->rollback();
+            $this->stats['error']++;
+            $this->errors[] = array('key' => $key, 'message' => $e->getMessage());
+        }
+    }
+
+    /**
+     * Message d'erreur exploitable à partir d'un objet Dolibarr en échec.
+     *
+     * @param CommonObject $object Objet dont l'opération a échoué
+     * @return string              Erreurs concaténées
+     */
+    protected function objectErrors($object)
+    {
+        $messages = array();
+        if (!empty($object->error)) {
+            $messages[] = $object->error;
+        }
+        if (!empty($object->errors)) {
+            $messages = array_merge($messages, $object->errors);
+        }
+
+        return $messages ? implode(' | ', $messages) : 'Erreur inconnue';
+    }
+}

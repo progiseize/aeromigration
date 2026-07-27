@@ -1,0 +1,21 @@
+# Module aeromigration
+Module399998Name=Reprise de données
+Module399998Desc=Reprise de données de l'ancien ERP vers Dolibarr
+
+# Administration
+AeroMigSetup=Configuration
+AeroMigSetupPageHelp=Scripts de reprise de données de l'ancien ERP vers Dolibarr. Chaque script crée les objets via l'API Dolibarr afin de respecter les règles de gestion, les numérotations et les triggers du coeur.
+AeroMigScript=Script de reprise
+AeroMigScriptCode=Code
+AeroMigScriptStatus=État
+AeroMigNoScript=Aucun script de reprise déclaré pour le moment.
+AeroMigStatusPending=À lancer
+AeroMigScriptThirdparty=Tiers (clients et fournisseurs)
+AeroMigCliHelp=Les reprises se lancent en ligne de commande depuis le dossier scripts/ du module : <strong>php migrate.php %s --dry-run</strong>
+
+# À propos
+AeroMigAboutText=Module technique destiné à la reprise des données de l'ancien ERP. Il n'ajoute ni table ni champ à Dolibarr et n'intervient pas dans son fonctionnement : il peut être désactivé une fois la reprise terminée.
+
+# Permissions
+Permission39999801=Consulter l'état de la reprise de données
+Permission39999802=Lancer un script de reprise de données
