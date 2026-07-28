@@ -75,5 +75,19 @@ function aeromigrationGetScripts()
             'class' => 'MigrationNewsletter',
             'file'  => '/aeromigration/class/migrationnewsletter.class.php',
         ),
+        // À passer avant les articles : ceux-ci s'y rattachent.
+        array(
+            'code'  => 'category',
+            'label' => 'AeroMigScriptCategory',
+            'class' => 'MigrationCategory',
+            'file'  => '/aeromigration/class/migrationcategory.class.php',
+        ),
+        // Indépendant des tiers. Nécessite le module aerotoolbox pour ses dictionnaires.
+        array(
+            'code'  => 'product',
+            'label' => 'AeroMigScriptProduct',
+            'class' => 'MigrationProduct',
+            'file'  => '/aeromigration/class/migrationproduct.class.php',
+        ),
     );
 }

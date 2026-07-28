@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 /* Copyright (C) 2026 Progiseize */
 
 include_once DOL_DOCUMENT_ROOT.'/core/modules/DolibarrModules.class.php';
@@ -36,7 +36,7 @@ class modAeroMigration extends DolibarrModules
         $this->module_position = '91';
         $this->name            = preg_replace('/^mod/i', '', get_class($this));
         $this->description     = 'Reprise de données de l\'ancien ERP vers Dolibarr';
-        $this->version         = '0.3.0';
+        $this->version         = '0.4.0';
         $this->const_name      = 'MAIN_MODULE_'.strtoupper($this->name);
         $this->picto           = 'fa-database_fas_#1A3085';
 

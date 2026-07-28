@@ -21,3 +21,5 @@ Permission39999801=Consulter l'état de la reprise de données
 Permission39999802=Lancer un script de reprise de données
 AeroMigScriptContact=Contacts
 AeroMigScriptNewsletter=Désinscriptions newsletter
+AeroMigScriptProduct=Articles
+AeroMigScriptCategory=Catégories produit

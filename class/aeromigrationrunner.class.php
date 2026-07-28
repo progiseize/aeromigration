@@ -142,6 +142,18 @@ abstract class AeroMigrationRunner
                 'file'       => '/contact/class/contact.class.php',
                 'delete_arg' => 'user',
             ),
+            'product' => array(
+                'label'      => "CONCAT_WS(' - ', ref, label)",
+                'class'      => 'Product',
+                'file'       => '/product/class/product.class.php',
+                'delete_arg' => 'user',
+            ),
+            'categorie' => array(
+                'label'      => 'label',
+                'class'      => 'Categorie',
+                'file'       => '/categories/class/categorie.class.php',
+                'delete_arg' => 'user',
+            ),
         );
 
         if (!isset($targets[$this->dstTable])) {
@@ -152,8 +164,10 @@ abstract class AeroMigrationRunner
         $target = $targets[$this->dstTable];
         require_once DOL_DOCUMENT_ROOT.$target['file'];
 
+        // L'entité se calcule sur l'élément Dolibarr, pas sur le nom de table : les deux
+        // diffèrent parfois — « category » pour la table `categorie ».
         $sql  = 'SELECT rowid, '.$target['label'].' as nom, ref_ext FROM '.MAIN_DB_PREFIX.$this->dstTable;
-        $sql .= ' WHERE entity IN ('.getEntity($this->dstTable).')';
+        $sql .= ' WHERE entity IN ('.getEntity($this->dstElement).')';
         $sql .= " AND ref_ext LIKE '".$this->db->escape($this->refExtPrefix)."%'";
         $sql .= ' ORDER BY rowid';
 

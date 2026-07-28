@@ -21,3 +21,5 @@ Permission39999801=Read data migration status
 Permission39999802=Run a data migration script
 AeroMigScriptContact=Contacts
 AeroMigScriptNewsletter=Newsletter unsubscriptions
+AeroMigScriptProduct=Products
+AeroMigScriptCategory=Product categories

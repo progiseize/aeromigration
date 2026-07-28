@@ -8,6 +8,266 @@ et de ce qui reste à arbitrer — pour ne pas refaire deux fois le même diagno
 
 ---
 
+## Catalogue (`f_catalogue`)
+
+| # | Anomalie | Volume | Décision |
+|---|---|---:|---|
+| K1 | Libellés en double sous un même parent | 7 | Fusionnés |
+| K2 | Hiérarchie non ordonnée par le parcours | 14 | Parents créés à la demande |
+| K3 | Racines du catalogue vs arborescence boutique | 60 | Greffées sous « Accueil » |
+
+`f_catalogue` porte le classement commercial de l'ancien ERP : **504 rubriques sur quatre
+niveaux** (61 racines, 175, 254, 14). C'est lui que les articles référencent par `CL_No1`,
+`CL_No2` et `CL_No3` — à ne pas confondre avec `FA_CodeFamille`, simple regroupement de
+TVA.
+
+### K1. Doublons de libellé
+
+Sept rubriques portent le même nom qu'une autre sous le même parent : `Tintin`,
+`Girouettes`, `Cartes aéronautiques 2025`, `Accessoires APcom`, `Cartes postales Benjamin
+FREUDENTHA`, `Cartes d'aérodromes et d'approches`, et un septième qui ne diffère que par
+la casse et ses points de suspension — `CD-Rom (formation, logiciels...)` contre
+`CD-ROM (formation, logiciels…)`.
+
+Dolibarr impose l'unicité du couple (libellé, parent). **Décision : la catégorie existante
+est réutilisée**, les deux entrées désignant la même rubrique ; les articles des deux s'y
+retrouvent.
+
+Un cas résiduel : `Tintin` figure deux fois **à la racine**. L'une ayant déjà été créée,
+le déplacement de l'autre sous « Accueil » est abandonné et signalé — elle reste où elle
+est plutôt que de faire échouer le passage.
+
+### K2. Une hiérarchie à créer dans l'ordre
+
+Le parcours suit `CL_No`, pas la profondeur : une rubrique de niveau 2 se présente parfois
+avant son parent. Celui-ci est alors **créé à la demande, récursivement**, avec un
+garde-fou contre les cycles. Quatorze rubriques ont ainsi été créées avant leur tour.
+
+### K3. Deux racines qui ne coïncident pas
+
+La boutique impose son arborescence — `Boutique Aero : Racine` puis `Accueil` — sous
+laquelle vivent ses catégories. Or `f_catalogue` déclare 60 rubriques à la racine
+(`CL_NoParent = 0`).
+
+**Décision : les rubriques racines sont greffées sous « Accueil »**, pour rejoindre
+l'arbre existant au lieu de vivre à côté.
+
+**La catégorie est retrouvée par son libellé**, « Accueil », identique sur toutes les
+instances — contrairement à son identifiant, qui vaut 2 chez le client et 504 sur la base
+de développement. Aucune configuration préalable n'est donc nécessaire.
+
+Trois cas de figure :
+
+| Situation | Comportement |
+|---|---|
+| Une seule « Accueil » | retenue automatiquement |
+| Plusieurs homonymes | **arrêt immédiat**, avant tout traitement |
+| Aucune | les rubriques racines le restent, sans blocage |
+
+L'ambiguïté ne peut pas se trancher toute seule : le script s'arrête et invite à supprimer
+ou renommer les doublons. Le libellé retenu est affiché en fin de passage
+(`Rubriques racines greffées sous : « Accueil » (rowid 504)`), ce qui rend toute erreur
+immédiatement visible.
+
+**Ne jamais modifier le parent d'une catégorie adoptée** : la hiérarchie de la boutique
+fait autorité. Le script ne pose le rattachement que s'il est vide.
+
+---
+
+## Articles (`f_article`)
+
+| # | Anomalie | Volume | Décision |
+|---|---|---:|---|
+| A1 | Origines mêlées : boutique et ancien ERP | 15 811 | Adoption ou création selon le cas |
+| A2 | Champs libres doublement encodés en UTF-8 | 321 | Décodés à la reprise |
+| A3 | Colonnes `disponibilite_origine` / `suivi_origine` incohérentes | 828 | Écartées |
+| A4 | Taux de TVA absent de la table | 828 | Déduit de la famille |
+| A5 | Non-renseignés déguisés en « #N/A » et « undefined » | ~20 100 | Écartés |
+| A6 | Références orphelines dans les tables liées | ~894 000 | À arbitrer lors des reprises suivantes |
+| A7 | Trois notions de coût pour un seul `cost_price` | 15 113 | Prix de revient retenu |
+| A8 | `f_consigne` : stock en dépôt-vente, pas des consignes | 279 | À traiter avec les stocks |
+
+### A1. Trois traitements selon l'origine de l'article
+
+`f_article` contient les 15 811 articles de l'ancien ERP, mais tous ne relèvent pas du
+même traitement :
+
+| Cas | Traitement |
+|---|---|
+| `ref_ext` déjà posé | déjà repris — ignoré, ou mis à jour avec `--update` |
+| `id_externe` connu de `llx_prestasync_product` | **adoption** — champs vides complétés |
+| Référence déjà portée par un produit | **adoption** — garde-fou contre les doublons |
+| Aucun des trois | **création**, puis déclaration à la boutique |
+
+Le troisième cas n'est pas théorique : lorsqu'un lien boutique manque, l'article serait
+recréé alors que le produit existe. Sans ce rapprochement de secours, un passage sur la
+source complète avec une table de liaison incomplète crée près de 15 000 doublons — ce qui
+est arrivé une fois en développement.
+
+Le fichier `data/prod.csv` a servi à délimiter un premier périmètre de 828 références. Il
+n'est **plus utilisé par le script** depuis que le rapprochement couvre tous les cas ; il
+est conservé à titre documentaire.
+
+**L'adoption ne remplace rien** : référence, libellé, prix, statut et type du produit
+restent ceux de la boutique. La reprise n'apporte que ce qui manque — poids, code-barres,
+coût de revient, code douanier, auteur, éditeur, garantie, disponibilité, suivi,
+catégories —, ce que la synchronisation ne renseigne pas.
+
+Une sauvegarde de la table reste disponible dans `f_article_backup` :
+
+```sql
+TRUNCATE f_article;
+INSERT INTO f_article SELECT * FROM f_article_backup;
+```
+
+**Piège d'environnement.** Importer `llx_prestasync_product` depuis la production sur une
+base de développement produit de faux rapprochements : ses `fk_product_doli` désignent des
+`rowid` de production, qui correspondent localement à d'autres produits. Constaté ici — le
+script s'apprêtait à compléter « Heure de maintenance atelier » avec les données de
+« Casque AC-200 ». Vider la table et reconstituer un scénario cohérent avant de tester.
+
+### A2. Champs libres doublement encodés
+
+`PA_ChampLibre_Intitule_2` stocke `ArrÃªt Ã  Ã©puisement du stock` au lieu de
+`Arrêt à épuisement du stock` : l'UTF-8 a été encodé une seconde fois. Concernés : 306
+valeurs sur le champ 2, 13 sur le champ 3, 2 sur le champ 4. `AR_Design` et le champ 1 en
+sont **indemnes**, tout comme `f_comptet`.
+
+Sans correction, le rapprochement avec les dictionnaires échoue : les 306 suivis
+ressortaient en « non reconnus ».
+
+La détection ne repose pas sur un motif — une expression régulière sur ces octets s'est
+révélée peu fiable — mais sur la conversion elle-même : un texte doublement encodé
+redevient de l'UTF-8 valide une fois reconverti en latin-1, un texte sain non. Validé sur
+les deux formes, accentuées et ASCII.
+
+### A3. Disponibilité et suivi : se fier aux champs libres
+
+Les colonnes `disponibilite_origine` et `suivi_origine` semblent prévues pour cet usage,
+mais **ne sont pas cohérentes avec les libellés** : le même `COMMERCIALISATION_ARRETEE`
+y apparaît tantôt en `0` (304 fois), tantôt en `6` (13 fois). Ce sont des champs de travail
+du connecteur boutique.
+
+La donnée métier est dans les champs libres, et correspond exactement aux dictionnaires du
+module `aerotoolbox` :
+
+- `PA_ChampLibre_Intitule_1` → `c_aerotoolbox_availability` (extrafield `aerotb_availability`)
+- `PA_ChampLibre_Intitule_2` → `c_aerotoolbox_tracking` (extrafield `aerotb_tracking`)
+
+347 articles sur 828 les renseignent. La reprise dépend donc du module `aerotoolbox` et
+s'interrompt avec un message explicite si ses dictionnaires sont absents.
+
+### A4. Taux de TVA déduit de la famille
+
+`f_article` ne porte aucun taux : il découle de `FA_CodeFamille`, dont le référentiel Sage
+n'a pas été importé. Correspondance arrêtée avec le client :
+
+| Famille | Articles | Taux |
+|---|---:|---:|
+| `V20` | 733 | 20 % |
+| `V5` | 85 | 5,5 % |
+| `AREAFFECTER` | 9 | 20 % |
+| `DIVERS` | 1 | 20 % |
+
+L'hypothèse est confirmée par les données : une carte aéronautique en V5 ressort à
+`11,85 HT + 5,5 % = 12,50 TTC`, soit un prix TTC rond — cohérent avec un tarif saisi TTC au
+taux du livre.
+
+`AR_PrixTTC` indique si le prix a été saisi toutes taxes comprises (437 articles) ; le
+montant complémentaire est recalculé.
+
+### A5. Des valeurs vides déguisées
+
+La source ne laisse pas ses champs vides : elle y écrit des marqueurs venus de tableurs ou
+de scripts, qu'il faut écarter comme s'ils étaient nuls.
+
+| Champ | Marqueur | Occurrences | Valeurs réelles |
+|---|---|---:|---:|
+| `PA_ChampLibre_Intitule_4` (auteur) | `#N/A` | 8 793 | 2 923 |
+| `PA_ChampLibre_Intitule_3` (éditeur) | `#N/A` | ~8 400 | 3 270 |
+| `lib_fiscal` (code douanier) | `undefined` | 5 655 | 4 830 |
+
+Le filtrage est centralisé dans `cleanFreeField()`, qui corrige aussi le double encodage
+au passage.
+
+**Ce que la source porte réellement**, et où cela aboutit :
+
+| Source | Volume | Cible |
+|---|---:|---|
+| `lib_fiscal` | 4 830 | `customcode` — nomenclature douanière, champ natif |
+| `PA_ChampLibre_Intitule_4` | 2 923 | extrafield `aerotb_auteur` |
+| `PA_ChampLibre_Intitule_3` | 3 270 | extrafield `aerotb_editeur` |
+
+Les codes douaniers sont pour l'essentiel en NC8 (huit chiffres, `49011000` pour les
+livres) ; une centaine sont en TARIC, plus long. Tous sont repris tels quels.
+
+L'auteur et l'éditeur étaient d'abord versés dans la note privée du produit ; ils ont
+depuis leurs champs propres, ce qui les rend filtrables en liste. Les 625 notes posées
+entre-temps ont été nettoyées.
+
+### A7. Trois notions de coût pour un seul champ
+
+La source distingue le prix d'achat brut (`AR_PrixAch`), le prix de revient unitaire
+(`AR_PrixRU`) et le coût standard (`AR_CoutStd`). Dolibarr n'a qu'un `cost_price`.
+
+Les trois diffèrent réellement : le prix de revient s'écarte du prix d'achat dans 9 236
+cas, et du coût standard dans 4 866.
+
+```
+Casque AC-200 :  achat 50,69   revient 69,92   coût standard 69,92   vente 119,00
+```
+
+**Décision : c'est le prix de revient qui alimente `cost_price`**, puisqu'il intègre les
+frais et donne une marge juste. Le prix d'achat relève du couple produit/fournisseur et
+sera repris avec les tarifs fournisseurs.
+
+**1 628 prix de revient sont aberrants**, inférieurs au centime — jusqu'à `0,000001 €`
+pour un article dont le coût standard vaut `4,19 €`. Le coût standard prend alors le
+relais, ce qui récupère 1 458 de ces cas ; les 170 restants n'ont de valeur exploitable
+dans aucune des deux colonnes.
+
+### A8. `f_consigne` : du stock en dépôt-vente, pas des consignes
+
+Le nom prête à confusion : il ne s'agit pas d'instructions mais de **consignation
+commerciale** — de la marchandise déposée chez un tiers qui n'en est pas propriétaire.
+
+La structure est celle de `f_artstock` — mêmes colonnes `AS_QteSto`, `AS_QteRes`,
+`AS_QteCom`, `AS_QteMini`/`Maxi` — avec **`CT_Num` en plus** : le stock est rattaché à un
+client, non à un dépôt.
+
+```
+AR_Ref 9906, CT_Num 27813     →  -8 en stock
+AR_Ref 9906, CT_Num 99113773  →  46 en stock, -36 réservés
+AR_Ref 9906, CT_Num 99116852  →   2 en stock,  -1 réservé
+```
+
+279 lignes. Aucun champ texte : les extrafields `aerotb_prep_notes`, `aerotb_pack_notes`
+et `aerotb_sale_notes` **n'ont pas de source** dans les données reprises.
+
+**À traiter avec la reprise des stocks**, pas avec les produits. Deux questions s'y
+poseront :
+
+- Dolibarr gère des entrepôts, pas du stock déposé chez un client. Il faudra soit créer un
+  entrepôt par dépositaire, soit écarter ces lignes.
+- Les quantités négatives (`-8`, `-36`) suggèrent des mouvements plutôt que des états :
+  à vérifier avant toute reprise.
+
+### A6. Références orphelines dans les tables liées
+
+La réduction de `f_article` laisse les tables liées pointer massivement dans le vide :
+
+| Table | Lignes | Orphelines |
+|---|---:|---:|
+| `f_docligne_global` | 1 039 279 | 851 765 (82 %) |
+| `f_artstock` | 27 670 | 26 497 (96 %) |
+| `f_artfourniss` | 15 962 | 15 545 (97 %) |
+
+C'est cohérent avec le périmètre retenu, ces lignes concernant les articles venus de la
+boutique. **À arbitrer lors de la reprise des stocks et des documents commerciaux** : les
+rattacher aux produits issus de PrestaShop, ou les écarter.
+
+---
+
 ## Tiers (`f_comptet`)
 
 ### Récapitulatif

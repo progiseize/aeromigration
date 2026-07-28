@@ -17,6 +17,31 @@ $societe->create($user);
 On conserve ainsi les règles de gestion, les extrafields, les modules de numérotation et
 les triggers du coeur. Les tables sources `f_*` ne sont lues qu'en lecture seule.
 
+## Ordre des reprises
+
+L'ordre n'est pas indifférent : chaque script s'appuie sur les objets posés par les
+précédents, qu'il retrouve par leur `ref_ext`.
+
+```
+php migrate.php thirdparty     tiers
+php migrate.php contact        contacts        → rattachés aux tiers
+php migrate.php newsletter     désinscriptions → enrichit les tiers
+php migrate.php category       catalogue
+php migrate.php product        articles        → rattachés aux catégories
+```
+
+| Script | Dépend de | Ce qui se passe s'il est lancé trop tôt |
+|---|---|---|
+| `thirdparty` | — | |
+| `contact` | `thirdparty` | s'arrête avec un message explicite |
+| `newsletter` | `thirdparty` | s'arrête avec un message explicite |
+| `category` | — | |
+| `product` | `category` | les articles sont créés **sans classement**, et le rapport le signale |
+
+Seul `product` reste tolérant : un article sans catégorie demeure un article valide, et
+l'on peut vouloir reprendre les produits seuls. Le rapport de fin de passage indique alors
+clairement qu'aucune catégorie n'a été trouvée.
+
 ## Lancer une reprise
 
 Toujours en ligne de commande, jamais depuis le navigateur : les volumes dépassent
