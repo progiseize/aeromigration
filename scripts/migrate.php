@@ -165,11 +165,16 @@ dol_include_once($definition['file']);
 /** @var AeroMigrationRunner $runner */
 $runner = new $definition['class']($db, $user);
 
-$runner->dryrun         = $dryrun;
-$runner->limit          = $limit;
-$runner->batchSize      = $batch;
-$runner->startCursor    = $cursor;
-$runner->updateExisting = $updateExisting;
+$runner->dryrun      = $dryrun;
+$runner->limit       = $limit;
+$runner->batchSize   = $batch;
+$runner->startCursor = $cursor;
+
+// --update force la mise à jour, mais son absence ne doit pas écraser le réglage d'un
+// script qui agit par nature sur des enregistrements existants.
+if ($updateExisting) {
+    $runner->updateExisting = true;
+}
 
 $total = $runner->countSource();
 

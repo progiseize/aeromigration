@@ -6,6 +6,47 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.3.0] — 2026-07-28
+
+### Reprise des désinscriptions newsletter
+
+- **Nouveau script `newsletter`** : les 2 621 tiers portant `Unsubscribe_Newsletter` sont
+  ajoutés à la liste des adresses exclues des envois en masse. Passe par
+  `Societe::setNoEmail()`, qui vérifie l'existence avant d'insérer — le script est donc
+  rejouable, ce qu'un second passage confirme.
+- Ne parcourt que les tiers concernés (2 621 sur 157 102) plutôt que toute la table.
+- 4 tiers désinscrits n'ont pas d'adresse e-mail : rien n'est reprenable pour eux, ils
+  sont comptés et signalés.
+### Purge spécialisable
+
+La purge supprimait jusqu'ici les objets portant le marqueur de la reprise, dans la table
+cible du script. Ce raccourci ne tient plus dès qu'un script écrit ailleurs que dans la
+table des objets qu'il manipule : `purge.php newsletter` aurait supprimé les 157 102
+tiers, alors qu'il n'en crée aucun.
+
+- La purge devient une méthode du socle (`AeroMigrationRunner::purge()`), que chaque
+  script peut spécialiser ; `purge.php` n'est plus qu'un lanceur.
+- **La purge des désinscriptions réinscrit les adresses** exclues par la reprise, via
+  `Societe::setNoEmail(0)`, sans toucher au moindre tiers. Vérifié : 2 617 réinscriptions,
+  157 102 tiers intacts, et une désinscription antérieure à la reprise préservée.
+- Chaque script annonce désormais ce qu'il va défaire avant de le faire.
+
+### Performance
+
+- **Génération des codes tiers sortie du chemin critique.** Dolibarr recalcule le prochain
+  numéro à chaque création, par un `SELECT MAX(CAST(SUBSTRING(...)))` que le commentaire du
+  coeur annonce comme indexé — il ne l'est pas. Mesuré à 134 ms sur 113 000 tiers, et
+  croissant : le coût total de la reprise était quadratique. Le compteur est désormais lu
+  une seule fois puis incrémenté en mémoire, à codes rigoureusement identiques.
+  **Débit : 13,8 → 93 tiers/s**, soit une reprise complète en une dizaine de minutes au
+  lieu de près de deux heures.
+
+### Corrigé
+
+- L'option `--update` absente écrasait le réglage des scripts qui agissent par nature sur
+  des enregistrements existants : ils ignoraient alors toutes leurs lignes.
+
+
 ## [0.2.0] — 2026-07-27
 
 ### Rapprochement avec la boutique en ligne

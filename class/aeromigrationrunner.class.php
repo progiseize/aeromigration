@@ -99,6 +99,116 @@ abstract class AeroMigrationRunner
     /** @var string Préfixe des ref_ext posés par la reprise */
     public $refExtPrefix = 'SAGE:';
 
+    /**
+     * Description de la purge, affichée avant toute suppression.
+     *
+     * @return string
+     */
+    public function getPurgeDescription()
+    {
+        return 'Suppression des enregistrements de '.MAIN_DB_PREFIX.$this->dstTable
+            .' marqués « '.$this->refExtPrefix.' »';
+    }
+
+    /**
+     * Annule ce que la reprise a produit.
+     *
+     * Comportement par défaut : supprimer, via l'API Dolibarr, les objets créés par le
+     * script — ceux qui portent le ref_ext de la reprise. Un script qui n'en crée aucun
+     * doit surcharger cette méthode pour défaire son propre travail, faute de quoi il
+     * détruirait des enregistrements créés par un autre.
+     *
+     * @param bool          $confirm  false pour dénombrer sans rien supprimer
+     * @param callable|null $progress Rappel de progression, reçoit ($traites, $total)
+     * @return array{count:int,deleted:int,failed:int,errors:array<int,string>}
+     */
+    public function purge($confirm = false, $progress = null)
+    {
+        $result = array('count' => 0, 'deleted' => 0, 'failed' => 0, 'errors' => array());
+
+        // Chaque classe métier nomme sa désignation différemment, et leurs delete() n'ont
+        // pas la même signature : Societe::delete($id, $user) attend l'identifiant en
+        // premier, Contact::delete($user) attend l'utilisateur.
+        $targets = array(
+            'societe' => array(
+                'label'      => 'nom',
+                'class'      => 'Societe',
+                'file'       => '/societe/class/societe.class.php',
+                'delete_arg' => 'id',
+            ),
+            'socpeople' => array(
+                'label'      => "CONCAT_WS(' ', lastname, firstname)",
+                'class'      => 'Contact',
+                'file'       => '/contact/class/contact.class.php',
+                'delete_arg' => 'user',
+            ),
+        );
+
+        if (!isset($targets[$this->dstTable])) {
+            $result['errors'][] = 'Table cible non prise en charge par la purge : '.$this->dstTable;
+            return $result;
+        }
+
+        $target = $targets[$this->dstTable];
+        require_once DOL_DOCUMENT_ROOT.$target['file'];
+
+        $sql  = 'SELECT rowid, '.$target['label'].' as nom, ref_ext FROM '.MAIN_DB_PREFIX.$this->dstTable;
+        $sql .= ' WHERE entity IN ('.getEntity($this->dstTable).')';
+        $sql .= " AND ref_ext LIKE '".$this->db->escape($this->refExtPrefix)."%'";
+        $sql .= ' ORDER BY rowid';
+
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $result['errors'][] = $this->db->lasterror();
+            return $result;
+        }
+
+        $rows = array();
+        while ($obj = $this->db->fetch_object($resql)) {
+            $rows[] = $obj;
+        }
+        $this->db->free($resql);
+
+        $result['count'] = count($rows);
+        if (!$confirm || empty($rows)) {
+            return $result;
+        }
+
+        $className = $target['class'];
+
+        foreach ($rows as $row) {
+            /** @var CommonObject $object */
+            $object = new $className($this->db);
+            if ($object->fetch((int) $row->rowid) <= 0) {
+                $result['failed']++;
+                $result['errors'][] = $row->ref_ext.' : chargement impossible';
+                continue;
+            }
+
+            $this->db->begin();
+            if ($target['delete_arg'] === 'user') {
+                $res = $object->delete($this->user);
+            } else {
+                $res = $object->delete((int) $row->rowid, $this->user);
+            }
+
+            if ($res > 0) {
+                $this->db->commit();
+                $result['deleted']++;
+            } else {
+                $this->db->rollback();
+                $result['failed']++;
+                $result['errors'][] = $row->ref_ext.' : '.$this->objectErrors($object);
+            }
+
+            if (is_callable($progress) && (($result['deleted'] + $result['failed']) % 200 === 0)) {
+                call_user_func($progress, $result['deleted'] + $result['failed'], $result['count']);
+            }
+        }
+
+        return $result;
+    }
+
     // ── Options d'exécution ────────────────────────────────────────────────
 
     /** @var int Nombre d'enregistrements lus par tranche */

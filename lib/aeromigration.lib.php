@@ -68,5 +68,12 @@ function aeromigrationGetScripts()
             'class' => 'MigrationContact',
             'file'  => '/aeromigration/class/migrationcontact.class.php',
         ),
+        // Dépend également des tiers : enrichit les fiches existantes, n'en crée aucune.
+        array(
+            'code'  => 'newsletter',
+            'label' => 'AeroMigScriptNewsletter',
+            'class' => 'MigrationNewsletter',
+            'file'  => '/aeromigration/class/migrationnewsletter.class.php',
+        ),
     );
 }

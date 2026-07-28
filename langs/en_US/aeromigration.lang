@@ -20,3 +20,4 @@ AeroMigAboutText=Technical module dedicated to migrating data from the legacy ER
 Permission39999801=Read data migration status
 Permission39999802=Run a data migration script
 AeroMigScriptContact=Contacts
+AeroMigScriptNewsletter=Newsletter unsubscriptions

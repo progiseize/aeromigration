@@ -4,20 +4,22 @@
 /**
  * \file    custom/aeromigration/scripts/purge.php
  * \ingroup aeromigration
- * \brief   Supprime les objets créés par une reprise, pour repartir d'une base propre.
+ * \brief   Annule ce qu'un script de reprise a produit, pour pouvoir le rejouer.
  *
- * Outil de mise au point : tant que le mapping n'est pas figé, il faut pouvoir annuler
- * un passage et le rejouer. La sélection s'appuie exclusivement sur le ref_ext posé par
- * la reprise (préfixe « SAGE: ») : un enregistrement créé manuellement dans Dolibarr,
- * qui n'a pas ce marqueur, ne peut pas être touché.
+ * Outil de mise au point : tant que le mapping n'est pas figé, il faut pouvoir défaire un
+ * passage et le recommencer.
  *
- * La suppression passe par l'API Dolibarr (delete()), afin que les données liées
- * (extrafields, catégories, contacts…) et les triggers soient traités correctement.
+ * Chaque script décrit lui-même comment se défaire (voir AeroMigrationRunner::purge) :
+ *  - les scripts qui créent des objets suppriment ceux qui portent leur marqueur ref_ext,
+ *    via l'API Dolibarr, sans jamais toucher à ce qui a été saisi à la main ;
+ *  - les scripts qui se contentent d'enrichir des objets existants annulent leur propre
+ *    écriture — la reprise des désinscriptions, par exemple, réinscrit les adresses
+ *    qu'elle avait exclues, sans supprimer le moindre tiers.
  *
  * Usage :
  *   php purge.php <script> [--confirm] [--user=LOGIN]
  *
- * Sans --confirm, le script se contente de dénombrer ce qui serait supprimé.
+ * Sans --confirm, le script se contente de dénombrer ce qui serait défait.
  */
 
 if (!defined('NOTOKENRENEWAL')) {
@@ -50,7 +52,6 @@ if (substr($sapi_type, 0, 3) === 'cgi') {
 
 require_once $path.'../../../master.inc.php';
 require_once DOL_DOCUMENT_ROOT.'/user/class/user.class.php';
-require_once DOL_DOCUMENT_ROOT.'/societe/class/societe.class.php';
 dol_include_once('/aeromigration/lib/aeromigration.lib.php');
 
 $langs->loadLangs(array('admin', 'aeromigration@aeromigration'));
@@ -123,135 +124,53 @@ $user->loadRights();
 
 
 /*
- * Cibles
+ * Exécution
  */
 
 dol_include_once($definition['file']);
 
 /** @var AeroMigrationRunner $runner */
 $runner = new $definition['class']($db, $user);
-$prefix = $runner->refExtPrefix;
 
-// Seule la table cible du script est concernée, et uniquement les lignes marquées.
-$targetTable = $runner->getDstTable();
+echo "Script    : ".$definition['code']."\n";
+echo "Opération : ".$runner->getPurgeDescription()."\n";
 
-// Chaque table nomme sa désignation différemment, et la classe métier à instancier en
-// dépend : on ne supprime jamais en SQL direct.
-// Attention aux signatures de delete(), qui diffèrent d'une classe à l'autre :
-// Societe::delete($id, $user) attend l'identifiant en premier, Contact::delete($user)
-// attend l'utilisateur. D'où la clé 'delete_arg'.
-$targets = array(
-    'societe' => array(
-        'label'      => 'nom',
-        'class'      => 'Societe',
-        'file'       => '/societe/class/societe.class.php',
-        'delete_arg' => 'id',
-    ),
-    'socpeople' => array(
-        'label'      => "CONCAT_WS(' ', lastname, firstname)",
-        'class'      => 'Contact',
-        'file'       => '/contact/class/contact.class.php',
-        'delete_arg' => 'user',
-    ),
-);
+$progress = function ($done, $total) {
+    printf("\r  %d/%d traité(s)   ", $done, $total);
+};
 
-if (!isset($targets[$targetTable])) {
-    echo "Table cible non prise en charge par la purge : ".$targetTable."\n";
-    exit(1);
-}
+$result = $runner->purge($confirm, $progress);
 
-$target = $targets[$targetTable];
-require_once DOL_DOCUMENT_ROOT.$target['file'];
+echo "Concernés : ".$result['count']." enregistrement(s)\n";
 
-$sql = 'SELECT rowid, '.$target['label'].' as nom, ref_ext FROM '.MAIN_DB_PREFIX.$targetTable;
-$sql .= " WHERE entity IN (".getEntity($targetTable).")";
-$sql .= " AND ref_ext LIKE '".$db->escape($prefix)."%'";
-$sql .= ' ORDER BY rowid';
-
-$resql = $db->query($sql);
-if (!$resql) {
-    echo "Erreur SQL : ".$db->lasterror()."\n";
-    exit(1);
-}
-
-$rows = array();
-while ($obj = $db->fetch_object($resql)) {
-    $rows[] = $obj;
-}
-$db->free($resql);
-
-echo "Script     : ".$definition['code']."\n";
-echo "Table      : ".MAIN_DB_PREFIX.$targetTable."\n";
-echo "Marqueur   : ref_ext commençant par « ".$prefix." »\n";
-echo "Concernés  : ".count($rows)." enregistrement(s)\n";
-
-if (empty($rows)) {
-    echo "Rien à supprimer.\n";
+if ($result['count'] === 0) {
+    echo "Rien à faire.\n";
+    if (!empty($result['errors'])) {
+        foreach ($result['errors'] as $err) {
+            echo "  ".$err."\n";
+        }
+    }
     $db->close();
-    exit(0);
+    exit(empty($result['errors']) ? 0 : 1);
 }
 
 if (!$confirm) {
-    echo "\nSimulation : aucune suppression effectuée.\n";
-    echo "Relancez avec --confirm pour supprimer réellement.\n";
+    echo "\nSimulation : aucune modification effectuée.\n";
+    echo "Relancez avec --confirm pour appliquer.\n";
     $db->close();
     exit(0);
 }
 
+echo "\nTraités   : ".$result['deleted']."\n";
+echo "En échec  : ".$result['failed']."\n";
 
-/*
- * Suppression
- */
-
-$deleted = 0;
-$failed  = 0;
-$errors  = array();
-
-$className = $target['class'];
-
-foreach ($rows as $row) {
-    /** @var Societe|Contact $object */
-    $object = new $className($db);
-    if ($object->fetch((int) $row->rowid) <= 0) {
-        $failed++;
-        $errors[] = $row->ref_ext.' : chargement impossible';
-        continue;
-    }
-
-    $db->begin();
-    if ($target['delete_arg'] === 'user') {
-        $result = $object->delete($user);
-    } else {
-        $result = $object->delete((int) $row->rowid, $user);
-    }
-    if ($result > 0) {
-        $db->commit();
-        $deleted++;
-    } else {
-        $db->rollback();
-        $failed++;
-        $message = !empty($object->error) ? $object->error : 'erreur inconnue';
-        if (!empty($object->errors)) {
-            $message .= ' | '.implode(' | ', $object->errors);
-        }
-        $errors[] = $row->ref_ext.' : '.$message;
-    }
-
-    if (($deleted + $failed) % 200 === 0) {
-        printf("\r  %d/%d traité(s)   ", $deleted + $failed, count($rows));
-    }
-}
-
-echo "\nSupprimés  : ".$deleted."\n";
-echo "En échec   : ".$failed."\n";
-
-if (!empty($errors)) {
+if (!empty($result['errors'])) {
     echo "\nDétail (20 premiers) :\n";
-    foreach (array_slice($errors, 0, 20) as $err) {
+    foreach (array_slice($result['errors'], 0, 20) as $err) {
         echo "  ".$err."\n";
     }
 }
 
 $db->close();
 
-exit($failed > 0 ? 1 : 0);
+exit($result['failed'] > 0 ? 1 : 0);
