@@ -8,7 +8,9 @@ et de ce qui reste à arbitrer — pour ne pas refaire deux fois le même diagno
 
 ---
 
-## Récapitulatif
+## Tiers (`f_comptet`)
+
+### Récapitulatif
 
 | # | Anomalie | Volume | Décision |
 |---|---|---:|---|
@@ -26,6 +28,7 @@ et de ce qui reste à arbitrer — pour ne pas refaire deux fois le même diagno
 | 12 | `cbMarq` à 0 sur toute la table `f_comptet` | 157 103 | Curseur basé sur `CT_Num` |
 | 13 | `CT_CodeRegion` quasi jamais renseigné | 81 / 157 103 | Champ abandonné |
 | 14 | Codes postaux avec espace parasite | 6 | Nettoyés (`trim`) |
+| 14b | Code postal incohérent avec la ville | ~170 estimés | Repris tel quel |
 | 15 | Noms de colonnes aux accents perdus | — | Sans effet, à connaître |
 | 16 | `CT_Identifiant` mélange TVA et identifiants internes | 89 / 133 | Seuls les vrais n° de TVA repris |
 | 17 | Identifiants légaux quasi jamais renseignés | 41 SIRET, 16 APE | Repris, mais apport marginal |
@@ -41,6 +44,136 @@ et de ce qui reste à arbitrer — pour ne pas refaire deux fois le même diagno
 | 27 | `Unsubscribe_Newsletter` sans champ cible sur le tiers | 2 621 | À traiter avec les contacts |
 | 28 | `RE_No` : table des représentants absente de l'import | 2 071 | Non repris, récupérable |
 | 29 | `N_Devise` : table des devises absente de l'import | 97 | Codes déduits des pays, repris |
+
+---
+
+## Contacts (`f_contactt`)
+
+| # | Anomalie | Volume | Décision |
+|---|---|---:|---|
+| C1 | Contacts qui répètent le nom de leur tiers | 124 273 / 155 368 | Repris quand même |
+| C2 | `CT_Civilite` n'est pas une civilité | 155 369 | Civilité déduite du tiers |
+| C3 | Coordonnées et adresse absentes du contact | 43 tél. / 155 369 | Reprises du tiers |
+| C4 | Nom identique au prénom | 507 | Prénom vidé |
+| C5 | Contact rattaché à un tiers inexistant | 1 | Refusé et signalé |
+| C6 | Retour à la ligne dans un nom | 1 | Espaces normalisés |
+| C7 | Désinscription newsletter | 2 621 tiers | Reprise via `Societe::setNoEmail()` |
+| C8 | Contacts sans nom ni prénom | 957 | Écartés et signalés |
+
+### C1. Des contacts qui doublonnent leur tiers
+
+**124 273 contacts sur 155 368 portent exactement le nom de leur société.** C'est logique :
+chez un particulier, le « contact » Sage *est* le client. Seuls 31 095 apportent une
+information (nom différent, ou coordonnée propre).
+
+Le déséquilibre est net selon la nature du tiers : 123 802 doublons sur 147 487 contacts de
+particuliers (84 %), contre 478 sur 7 881 pour les personnes morales (6 %).
+
+**Décision : reprise de la totalité**, fidélité à la source.
+
+### C2. `CT_Civilite` n'est pas une civilité
+
+Malgré son nom, la colonne classe le **genre et la nature du tiers**, pas la civilité :
+
+| Valeur | Signification déduite | Volume |
+|---:|---|---:|
+| 0 | masculin, ou non renseigné | 109 794 |
+| 1 | féminin | 39 028 |
+| 2 | personne morale | 6 521 |
+| 3 | indéterminé | 26 |
+
+Elle est inexploitable telle quelle : parmi les 0 figurent 1 315 « Madame », 1 206 « Mme » et
+344 « Mademoiselle ». S'en servir aurait adressé environ 2 865 clientes en « Monsieur ».
+
+**Décision : la civilité est déduite de `CT_Qualite` du tiers** (Monsieur → `MR`,
+Madame/Mme → `MME`, Mademoiselle → `MLE`), seul champ fiable. Les personnes morales n'en
+reçoivent aucune.
+
+### C3. Des contacts sans coordonnées ni adresse
+
+Sur 155 369 contacts : 54 e-mails, 43 téléphones, 23 fonctions, 1 fax. Et surtout,
+`f_contactt` **ne comporte aucune colonne d'adresse** — ni rue, ni code postal, ni ville.
+Toutes ces informations ne vivent que sur le tiers.
+
+**Décision : les coordonnées et l'adresse du tiers sont reportées sur le contact**, sans
+quoi la quasi-totalité des fiches contact serait vide. Ce qui existe en propre sur le
+contact reste prioritaire.
+
+Ces valeurs sont relues sur le **tiers Dolibarr déjà migré**, et non sur la source : son
+adresse, son pays et son département y sont déjà normalisés. Cela évite de dupliquer dans
+le script contacts la table de correspondance des pays et la déduction du département, et
+garantit que les deux fiches portent la même information.
+
+Contrepartie assumée : la donnée est dupliquée et ne suivra pas un changement d'adresse
+ultérieur du tiers.
+
+### C4. Nom identique au prénom
+
+507 contacts portent la même valeur dans les deux champs, souvent une saisie dégradée
+(`#`, `a`, `00225 05 934 338`). **Décision : seul le nom est conservé**, le prénom est vidé.
+
+### C8. Contacts sans nom ni prénom
+
+957 lignes de `f_contactt` n'ont ni `CT_Nom` ni `CT_Prenom`. Ce sont des coquilles créées
+dans l'ancien ERP puis jamais renseignées — rattachées, elles, à des tiers parfaitement
+valides (`ÉDITIONS JPO`, `DIMATEX Sécurité`…).
+
+Elles sont pour l'essentiel vides de bout en bout :
+
+| | Nombre |
+|---|---:|
+| Sans identité | 956 (+1 contact orphelin, voir C5) |
+| dont avec un e-mail | 13 |
+| dont avec un téléphone | 11 |
+| dont avec une fonction | 4 |
+| **dont totalement vides** | **~930** |
+
+Dolibarr exige un nom pour créer un contact. **Décision : ces lignes sont écartées** et
+listées en fin de passage. Les reprendre en leur donnant le nom de leur tiers créerait 930
+fiches sans le moindre contenu, qui encombreraient les listes et les sélecteurs de contact
+pour rien.
+
+Conséquence assumée : les quelque 25 lignes qui portent un e-mail ou un téléphone ne sont
+pas reprises non plus. Elles restent identifiables dans la source si le besoin se
+manifeste :
+
+```sql
+SELECT CT_No, CT_Num, CT_EMail, CT_Telephone, CT_TelPortable, CT_Fonction
+FROM f_contactt
+WHERE TRIM(COALESCE(CT_Nom,'')) = '' AND TRIM(COALESCE(CT_Prenom,'')) = ''
+  AND (TRIM(COALESCE(CT_EMail,'')) <> '' OR TRIM(COALESCE(CT_Telephone,'')) <> ''
+       OR TRIM(COALESCE(CT_TelPortable,'')) <> '' OR TRIM(COALESCE(CT_Fonction,'')) <> '');
+```
+
+### C7. Désinscription newsletter
+
+**Traité par le script `newsletter`.** 2 621 tiers portent `Unsubscribe_Newsletter = 1`,
+dont 2 617 avec une adresse e-mail — les 4 autres ne sont pas reprenables, faute d'adresse.
+
+Dolibarr ne stocke pas cette information sur la fiche : la colonne `no_email` de
+`llx_socpeople` est marquée « no more used » dans le coeur, et `Contact::setNoEmail()` ne
+fait rien lorsque le contact n'a pas d'adresse — ce qui était le cas de 155 315 contacts
+sur 155 369. La désinscription est en réalité une simple liste d'adresses,
+`llx_mailing_unsubscribe`, consultée au moment des envois en masse.
+
+La reprise passe donc par **`Societe::setNoEmail()`** (societe.class.php:4576), qui vérifie
+l'existence de l'adresse avant de l'insérer : le script est naturellement rejouable.
+
+**Conséquence à connaître : c'est l'ADRESSE qui est désinscrite, pas le tiers.** Or 9
+adresses de la source sont partagées entre un tiers désinscrit et un tiers qui ne l'est
+pas. Les désinscrire les retire des envois pour les deux. C'est le fonctionnement de
+Dolibarr, pas un défaut de la reprise, mais il faut le savoir avant la première campagne.
+
+### C7bis. Note historique
+
+`Unsubscribe_Newsletter` (2 621 tiers) n'a pas trouvé sa place. Dolibarr ne stocke plus
+cette information sur le contact : la colonne `no_email` de `llx_socpeople` est annotée
+« no more used » dans le cœur, et `Contact::setNoEmail()` alimente en réalité
+`llx_mailing_unsubscribe` — une simple liste d'adresses. Or cette méthode **ne fait rien si
+le contact n'a pas d'e-mail**, ce qui est le cas de 155 315 des 155 369 contacts.
+
+L'adresse étant portée par le tiers, la reprise consisterait à insérer les e-mails des
+2 621 tiers désinscrits directement dans `llx_mailing_unsubscribe`. **À traiter à part.**
 
 ---
 
@@ -154,6 +287,31 @@ françaises.
 
 À signaler : 61 tiers ont une ville sans code postal, et 173 une ville sans adresse.
 
+### 14b. Codes postaux incohérents avec la ville
+
+Certaines adresses associent un code postal et une ville qui ne correspondent pas. Le cas
+repéré à l'œil nu : le tiers `91` porte `31000 MONTAUBAN`, alors que 31000 est Toulouse et
+Montauban 82000.
+
+Faute de référentiel officiel code postal / commune, le volume a été estimé en repérant
+les villes rattachées à plusieurs départements et en isolant les rattachements marginaux
+(moins de 5 % des occurrences d'une ville apparaissant au moins 20 fois) : **environ 170
+lignes**, sur 960 villes concernées par au moins deux départements.
+
+Exemples : `TOULOUSE` apparaît 4 464 fois, dont une fois en `33`, une en `66`, une en `69`
+et deux en `75` ; `PARIS` apparaît 4 301 fois, dont six en `92` et deux en `44`.
+
+L'estimation est prudente et à prendre comme un ordre de grandeur : des homonymes
+légitimes existent (plusieurs Saint-Denis, Sainte-Marie…), et à l'inverse une erreur qui
+resterait dans le bon département passerait inaperçue.
+
+**Décision : repris tel quel**, conformément à la règle retenue pour les téléphones et
+les e-mails — la source fait foi.
+
+**Conséquence à connaître :** le département étant déduit du code postal, ces adresses
+reçoivent un département cohérent avec le code postal mais faux au regard de la ville. Le
+contact hérite du même défaut, puisqu'il reprend l'adresse du tiers.
+
 ### 15. Noms de colonnes aux accents perdus
 
 Plusieurs colonnes de `f_comptet` ont perdu leurs caractères accentués à la création de
@@ -213,9 +371,16 @@ et `4` à `8` → 69. Deux réserves :
 
 **Décision : repris tel quel**, pour conserver l'information.
 
-Point technique : `price_level` n'est écrit ni par `create()` ni par `update()`. Il faut
-passer par `setPriceLevel()`, qui journalise chaque changement dans
-`llx_societe_prices` — la reprise ne l'appelle donc que si le niveau change réellement.
+Deux pièges Dolibarr sur ce champ :
+
+- `price_level` n'est écrit ni par `create()` ni par `update()`. Il faut passer par
+  `setPriceLevel()`, qui journalise chaque changement dans `llx_societe_prices` — la
+  reprise ne l'appelle donc que si le niveau change réellement.
+- **`Societe::fetch()` ne restitue pas la valeur brute** : lorsque le multiprix est actif
+  (`PRODUIT_MULTIPRICES`) et que la colonne est vide, il retourne `1` par défaut
+  (societe.class.php:2231). Tester `$societe->price_level` après un `fetch()` laisse donc
+  croire que toute fiche possède déjà un niveau, et la reprise n'en pose jamais. Le
+  script relit la valeur directement en base pour décider.
 
 **`CT_Commentaire`** n'est renseigné que sur 26 lignes ; repris dans `note_private`.
 
@@ -257,7 +422,7 @@ exploitable. Vérifié avant d'écarter :
 | `N_Condition` | 156 992 | vaut `1` partout |
 | `date_naissance` | 157 102 | **136 vraies dates**, le reste à `0000-00-00` |
 | `CT_NumPayeur` | 155 961 | code calculé, sans contrepartie en base — voir ci-dessous |
-| `id_externe` | 155 562 | recopie de `CT_Num`, déjà couvert par `ref_ext` |
+| `id_externe` | 155 562 | **identifiant du client dans la boutique en ligne** — voir §31 |
 | `indexation`, `CT_Classement`, `CT_Lettrage`, `CT_Saut`, `CT_Facture`, `N_Period`, `CT_BLFact` | ~157 000 | champs techniques internes à Sage |
 
 **Le cas `CT_NumPayeur`** mérite un mot, car il ressemble à un lien vers un autre tiers
@@ -315,6 +480,44 @@ table de référence correspondante dans le périmètre importé :
 
   Il suffit de déclarer la devise dans `Configuration > Multidevise` (avec son taux de
   change) puis de rejouer la reprise en `--update` : le mapping les attend.
+
+### 31. `id_externe` et le rapprochement avec la boutique en ligne
+
+**Correction d'une analyse initiale erronée** : `id_externe` avait d'abord été écarté comme
+une simple recopie de `CT_Num`. C'est faux — seules 110 458 valeurs sur 157 102 coïncident,
+les fournisseurs perdant par exemple leur préfixe (`F128` → `128`).
+
+`id_externe` est en réalité l'**identifiant du client dans PrestaShop**. C'est la clé de
+rapprochement avec les tiers déjà présents dans Dolibarr, via la table
+`llx_prestasync_customer` du module Prestasync :
+
+| Colonne | Rôle |
+|---|---|
+| `fk_soc_doli` | rowid du tiers Dolibarr |
+| `fk_customer_presta` | identifiant client PrestaShop = `f_comptet.id_externe` |
+
+Recouvrement vérifié : 20 176 des 20 487 liens retrouvent un tiers dans `f_comptet`
+(98,5 %).
+
+**Trois pièges de cette table :**
+
+- Rien n'impose qu'un tiers n'ait qu'un seul lien : l'index sur `fk_soc_doli` n'est pas
+  unique et la contrainte `uk_prestasync_customer_fieldp` porte sur le **triplet**
+  `(fk_presta, fk_soc_doli, fk_customer_presta)`. Indexer les liens par `fk_soc_doli` fait
+  donc silencieusement perdre des correspondances — erreur commise puis corrigée pendant
+  le développement. L'index doit aller de l'identifiant boutique vers le tiers.
+- **313 valeurs d'`id_externe` sont partagées** par plusieurs tiers Sage (dont `0`, présent
+  56 fois). Un identifiant boutique ne pouvant désigner qu'un seul tiers, les doublons sont
+  écartés du lien et comptés dans le rapport de fin de passage.
+- 1 540 tiers ont un `id_externe` vide ou égal à `'0'` : aucun rapprochement possible, ils
+  sont créés normalement et sans lien.
+
+**Pourquoi la reprise alimente cette table.** Le module de synchronisation **ne recherche
+aucun tiers existant** avant d'en créer un — choix de sécurité assumé et commenté dans son
+code (`prestaCustomer.class.php:270`), l'option de rapprochement par e-mail
+(`PRESTASYNC_LINK_CUSTOMER_BY_EMAIL`) étant inactive. Sans lien enregistré, la première
+commande d'un client repris ferait donc créer un second tiers. La reprise insère le lien
+pour chaque tiers créé disposant d'un `id_externe` exploitable.
 
 ### 30. Table `f_comptet_crm`
 
