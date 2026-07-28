@@ -17,6 +17,51 @@ $societe->create($user);
 On conserve ainsi les règles de gestion, les extrafields, les modules de numérotation et
 les triggers du coeur. Les tables sources `f_*` ne sont lues qu'en lecture seule.
 
+## Lancer une reprise
+
+Toujours en ligne de commande, jamais depuis le navigateur : les volumes dépassent
+largement les limites d'une requête web. En CLI, `max_execution_time` vaut 0, il n'y a donc
+aucun délai maximal d'exécution à craindre.
+
+```
+php -d memory_limit=512M migrate.php thirdparty
+php -d memory_limit=512M migrate.php contact
+```
+
+**Relever `memory_limit` est nécessaire**, pas optionnel. Les scripts chargent leurs
+référentiels en mémoire une fois pour toutes, plutôt que d'interroger la base à chaque
+ligne — ce qui fait la différence entre quelques minutes et plusieurs heures. L'index des
+contacts (155 000 tiers avec leurs coordonnées) pèse à lui seul environ 128 Mo, soit la
+valeur par défaut de `memory_limit` : sans ce réglage, la reprise des contacts s'arrête sur
+un `Allowed memory size exhausted`.
+
+L'option `-d` ne vaut que pour l'exécution en cours : ni le `php.ini` ni le PHP d'Apache ne
+sont modifiés.
+
+Une reprise interrompue se reprend sans dommage : chaque ligne est écrite dans sa propre
+transaction, et les enregistrements déjà repris sont reconnus à leur `ref_ext`. Relancer
+la même commande suffit, l'option `--cursor` permettant d'aller plus vite si l'on a noté
+la dernière valeur affichée.
+
+## Rapprochement avec la boutique en ligne
+
+La cible n'est pas vierge : le module Prestasync y crée des tiers venus de PrestaShop. La
+reprise des tiers en tient compte de deux façons.
+
+**Adoption.** Un tiers déjà présent est reconnu via `llx_prestasync_customer`
+(`fk_customer_presta` = `f_comptet.id_externe`). Il n'est pas recréé : la reprise ne
+remplit que les champs laissés vides et pose son `ref_ext`. Son nom, son code client et son
+statut ne sont jamais modifiés.
+
+**Déclaration des nouveaux tiers.** Chaque tiers créé est inscrit dans
+`llx_prestasync_customer`, sans quoi la première commande du client sur la boutique ferait
+créer un doublon — le module ne recherche aucun tiers existant avant d'en créer un.
+
+C'est la **seule écriture SQL directe** du module, à rebours de la règle générale. Elle est
+assumée : `PrestaCustomer::setCustomDolLink()` n'exécute qu'un `INSERT` sans traitement
+annexe, et passer par la classe imposerait d'ouvrir une connexion webservice vers la
+boutique pour chacun des ~135 000 tiers.
+
 ## Anomalies de la source
 
 Les problèmes de qualité rencontrés dans les données de l'ancien ERP, les décisions

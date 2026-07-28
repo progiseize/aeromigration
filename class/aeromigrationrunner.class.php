@@ -70,6 +70,18 @@ abstract class AeroMigrationRunner
      */
     protected $srcCursorType = 'int';
 
+    /**
+     * Expression SQL désignant la colonne de parcours, lorsqu'elle diffère du nom de la
+     * propriété lue dans le résultat.
+     *
+     * Nécessaire dès que la source est une jointure : `cbMarq` y serait ambigu, il faut
+     * écrire `k.cbMarq` dans le WHERE et le ORDER BY, alors que la ligne retournée
+     * expose toujours la propriété `cbMarq`. Vide, c'est $srcCursorField qui est utilisé.
+     *
+     * @var string
+     */
+    protected $srcCursorSqlField = '';
+
     /** @var string Colonne portant la clé naturelle reportée dans ref_ext */
     protected $srcKeyField = '';
 
@@ -109,11 +121,30 @@ abstract class AeroMigrationRunner
 
     // ── Résultats ──────────────────────────────────────────────────────────
 
-    /** @var array{read:int,created:int,updated:int,skipped:int,error:int} Compteurs */
-    public $stats = array('read' => 0, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'error' => 0);
+    /**
+     * Compteurs du passage.
+     *
+     * « adopted » distingue les objets qui existaient déjà dans Dolibarr sans venir de la
+     * reprise — typiquement remontés par une autre synchronisation — et que le script a
+     * rattachés plutôt que recréés.
+     *
+     * @var array{read:int,created:int,adopted:int,updated:int,skipped:int,error:int}
+     */
+    public $stats = array('read' => 0, 'created' => 0, 'adopted' => 0, 'updated' => 0, 'skipped' => 0, 'error' => 0);
 
     /** @var array<int,array{key:string,message:string}> Détail des lignes en échec */
     public $errors = array();
+
+    /**
+     * Nombre maximum d'erreurs conservées en mémoire.
+     *
+     * Le compteur $stats['error'] reste exact : seule la liste détaillée est bornée.
+     * Sans cela, une reprise lancée dans le désordre (contacts avant tiers) accumulerait
+     * une entrée par ligne, soit plus de 150 000 objets pour rien.
+     *
+     * @var int
+     */
+    public $maxStoredErrors = 1000;
 
     /** @var int|string|null Dernier curseur atteint, à réutiliser pour reprendre */
     public $lastCursor = null;
@@ -174,6 +205,22 @@ abstract class AeroMigrationRunner
      */
     protected function validateRow($row)
     {
+    }
+
+    /**
+     * Action qu'aurait produite cette ligne, en mode simulation.
+     *
+     * Le socle ne distingue que création et mise à jour. Une classe fille capable de
+     * rattacher un objet préexistant surcharge cette méthode pour que le --dry-run
+     * annonce la bonne ventilation.
+     *
+     * @param stdClass $row        Ligne source
+     * @param int      $existingId rowid de l'objet déjà migré, 0 sinon
+     * @return string              Clé de $stats à incrémenter
+     */
+    protected function previewAction($row, $existingId)
+    {
+        return ($existingId > 0) ? 'updated' : 'created';
     }
 
     /**
@@ -278,6 +325,8 @@ abstract class AeroMigrationRunner
      */
     protected function fetchBatch($cursor)
     {
+        $cursorSql = ($this->srcCursorSqlField !== '') ? $this->srcCursorSqlField : $this->srcCursorField;
+
         $conditions = array();
         if ($this->srcWhere !== '') {
             $conditions[] = '('.$this->srcWhere.')';
@@ -286,9 +335,9 @@ abstract class AeroMigrationRunner
         // silencieusement une éventuelle clé vide.
         if ($cursor !== null && $cursor !== '') {
             if ($this->srcCursorType === 'string') {
-                $conditions[] = $this->srcCursorField." > '".$this->db->escape($cursor)."'";
+                $conditions[] = $cursorSql." > '".$this->db->escape($cursor)."'";
             } else {
-                $conditions[] = $this->srcCursorField.' > '.((int) $cursor);
+                $conditions[] = $cursorSql.' > '.((int) $cursor);
             }
         }
 
@@ -296,7 +345,7 @@ abstract class AeroMigrationRunner
         if ($conditions) {
             $sql .= ' WHERE '.implode(' AND ', $conditions);
         }
-        $sql .= ' ORDER BY '.$this->srcCursorField.' ASC';
+        $sql .= ' ORDER BY '.$cursorSql.' ASC';
         $sql .= ' LIMIT '.((int) $this->batchSize);
 
         $resql = $this->db->query($sql);
@@ -321,7 +370,7 @@ abstract class AeroMigrationRunner
      */
     public function run()
     {
-        $this->stats  = array('read' => 0, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'error' => 0);
+        $this->stats  = array('read' => 0, 'created' => 0, 'adopted' => 0, 'updated' => 0, 'skipped' => 0, 'error' => 0);
         $this->errors = array();
 
         if ($this->prepare() <= 0) {
@@ -388,7 +437,7 @@ abstract class AeroMigrationRunner
         $key = $this->getSourceKey($row);
         if ($key === '') {
             $this->stats['error']++;
-            $this->errors[] = array('key' => '(vide)', 'message' => 'Clé source absente ou vide');
+            $this->addError('(vide)', 'Clé source absente ou vide');
             return;
         }
 
@@ -408,15 +457,11 @@ abstract class AeroMigrationRunner
                 $this->validateRow($row);
             } catch (Exception $e) {
                 $this->stats['error']++;
-                $this->errors[] = array('key' => $key, 'message' => $e->getMessage());
+                $this->addError($key, $e->getMessage());
                 return;
             }
 
-            if ($existingId > 0) {
-                $this->stats['updated']++;
-            } else {
-                $this->stats['created']++;
-            }
+            $this->stats[$this->previewAction($row, $existingId)]++;
             return;
         }
 
@@ -443,7 +488,88 @@ abstract class AeroMigrationRunner
         } catch (Exception $e) {
             $this->db->rollback();
             $this->stats['error']++;
-            $this->errors[] = array('key' => $key, 'message' => $e->getMessage());
+            $this->addError($key, $e->getMessage());
+        }
+    }
+
+    /**
+     * Table Dolibarr alimentée par ce script, sans préfixe.
+     *
+     * Exposée pour que les outils transverses (purge) sachent où chercher les
+     * enregistrements marqués par la reprise.
+     *
+     * @return string
+     */
+    public function getDstTable()
+    {
+        return $this->dstTable;
+    }
+
+    /**
+     * Normalise un libellé pour un rapprochement : minuscules, sans accent, ponctuation
+     * et séparateurs ramenés à des espaces simples.
+     *
+     * C'est ce qui permet de traiter « Pays-Bas », « Pays bas » et « PAYS BAS » comme
+     * une seule et même valeur.
+     *
+     * @param string $label Libellé brut
+     * @return string       Libellé normalisé
+     */
+    protected function normalizeLabel($label)
+    {
+        $label = dol_string_unaccent((string) $label);
+        $label = strtolower($label);
+        $label = preg_replace('/[^a-z0-9]+/', ' ', $label);
+
+        return trim($label);
+    }
+
+    /**
+     * Met un numéro de téléphone au format international lorsqu'un préfixe pays est
+     * renseigné dans la source.
+     *
+     * Le zéro de tête d'un numéro national disparaît en notation internationale :
+     * « 0671834495 » avec le préfixe « 33 » devient « +33 671834495 ». Sans préfixe, le
+     * numéro est repris tel quel.
+     *
+     * Dolibarr retire de lui-même les espaces et les points à l'enregistrement.
+     *
+     * @param string $number Numéro brut
+     * @param string $prefix Préfixe pays brut (« 33 », « +33 », « 852 »…)
+     * @return string        Numéro mis en forme, chaîne vide si la source est vide
+     */
+    protected function formatPhone($number, $prefix)
+    {
+        $number = trim((string) $number);
+        if ($number === '') {
+            return '';
+        }
+
+        // Le préfixe est saisi tantôt « 33 », tantôt « +33 » : on ne garde que les
+        // chiffres avant de reconstruire la notation.
+        $prefix = preg_replace('/[^0-9]/', '', (string) $prefix);
+        if ($prefix === '') {
+            return $number;
+        }
+
+        if (substr($number, 0, 1) === '0') {
+            $number = ltrim(substr($number, 1));
+        }
+
+        return '+'.$prefix.' '.$number;
+    }
+
+    /**
+     * Enregistre une ligne en échec, dans la limite de $maxStoredErrors.
+     *
+     * @param string $key     Clé source
+     * @param string $message Message d'erreur
+     * @return void
+     */
+    protected function addError($key, $message)
+    {
+        if (count($this->errors) < $this->maxStoredErrors) {
+            $this->errors[] = array('key' => $key, 'message' => $message);
         }
     }
 

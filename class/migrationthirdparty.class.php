@@ -76,6 +76,73 @@ class MigrationThirdparty extends AeroMigrationRunner
     /** @var array<string,int> Valeurs de CT_Pays non résolues, avec leur nombre d'occurrences */
     protected $unresolvedCountries = array();
 
+    // ── Rapprochement avec la boutique en ligne ────────────────────────────
+
+    /**
+     * Identifiant de la boutique dans llx_prestasync_customer.
+     *
+     * Le client n'en exploite qu'une seule, et les 20 469 liens existants portent tous la
+     * valeur 1. Propriété plutôt que constante en dur, pour rester ajustable.
+     *
+     * @var int
+     */
+    protected $prestaShopId = 1;
+
+    /** @var bool La table de liaison Prestasync est-elle disponible ? */
+    protected $prestaLinkAvailable = false;
+
+    /** @var array<string,int> id client boutique -> rowid du tiers Dolibarr à rattacher */
+    protected $societeByPrestaId = array();
+
+    /** @var array<string,bool> Identifiants boutique déjà liés à un tiers */
+    protected $prestaIdsLinked = array();
+
+    /** @var int Nombre de tiers écartés du lien boutique car l'identifiant est déjà pris */
+    protected $prestaIdConflicts = 0;
+
+    /** @var int Nombre de liens boutique créés durant le passage */
+    protected $prestaLinksCreated = 0;
+
+    /** @var array<int,bool> Tiers déjà adoptés, pour n'en adopter aucun deux fois */
+    protected $adoptedSocIds = array();
+
+    // ── Génération des codes tiers ─────────────────────────────────────────
+
+    /**
+     * Compteurs de codes tiers, tenus en mémoire.
+     *
+     * Dolibarr recalcule le prochain numéro à CHAQUE création, par un
+     * `SELECT MAX(CAST(SUBSTRING(code_client FROM 7) AS SIGNED))` sur toute la table.
+     * Malgré le commentaire du coeur affirmant le contraire, cette requête n'exploite pas
+     * l'index — ni le `SUBSTRING`, ni le `LIKE 'CU____-%'` ne le permettent. Mesurée à
+     * 134 ms sur 113 000 tiers, et croissante : le coût total est quadratique, soit près
+     * de deux heures pour la reprise complète.
+     *
+     * Le compteur est donc lu une seule fois au démarrage, puis incrémenté en mémoire.
+     * Les codes produits sont rigoureusement identiques à ceux de mod_codeclient_monkey.
+     *
+     * @var array<string,int>
+     */
+    protected $codeCounters = array('client' => null, 'fournisseur' => null);
+
+    /** @var string Préfixe des codes client, comme mod_codeclient_monkey */
+    protected $codeClientPrefix = 'CU';
+
+    /** @var string Préfixe des codes fournisseur, comme mod_codeclient_monkey */
+    protected $codeFournisseurPrefix = 'SU';
+
+    /**
+     * Niveau de prix réellement stocké pour les tiers candidats à l'adoption.
+     *
+     * Indispensable car Societe::fetch() ne restitue pas la valeur brute : lorsque le
+     * multiprix est actif et que la colonne est vide, il retourne 1 par défaut
+     * (societe.class.php:2231). S'y fier ferait croire que toute fiche possède déjà un
+     * niveau, et la reprise n'en poserait jamais.
+     *
+     * @var array<int,int>
+     */
+    protected $priceLevelBySocId = array();
+
     /** @var array<string,int> Code de type de tiers -> id de llx_c_typent */
     protected $typentByCode = array();
 
@@ -323,6 +390,11 @@ class MigrationThirdparty extends AeroMigrationRunner
             }
         }
 
+        // ── Rapprochement avec la boutique en ligne ────────────────────────
+        if ($this->loadPrestaLinks() < 0) {
+            return -1;
+        }
+
         // ── Devises déclarées dans l'entité ────────────────────────────────
         // Seules les devises présentes dans llx_multicurrency sont exploitables :
         // Societe::create() vide multicurrency_code sans rien signaler lorsque le code
@@ -382,6 +454,221 @@ class MigrationThirdparty extends AeroMigrationRunner
     }
 
     /**
+     * Charge les correspondances avec les clients de la boutique en ligne.
+     *
+     * Deux index sont construits :
+     *  - les tiers déjà remontés par la boutique et pas encore repris, candidats à
+     *    l'adoption ;
+     *  - l'ensemble des identifiants boutique déjà liés, pour ne jamais en associer un à
+     *    deux tiers.
+     *
+     * La jointure sur llx_societe est indispensable : un lien peut désigner un tiers
+     * supprimé. Le filtre sur ref_ext écarte ceux que la reprise gère déjà.
+     *
+     * L'absence de la table n'est pas une erreur : le module Prestasync peut ne pas être
+     * installé, auquel cas le rapprochement est simplement sans objet.
+     *
+     * @return int 1 si OK, -1 en cas d'erreur SQL
+     */
+    protected function loadPrestaLinks()
+    {
+        $table = MAIN_DB_PREFIX.'prestasync_customer';
+
+        // Le second paramètre à 1 rend l'échec silencieux : on teste l'existence.
+        if (!$this->db->query('SELECT rowid FROM '.$table.' LIMIT 1', 1)) {
+            dol_syslog('MigrationThirdparty : table '.$table.' absente, rapprochement boutique désactivé', LOG_NOTICE);
+            return 1;
+        }
+
+        $this->prestaLinkAvailable = true;
+
+        // L'index va de l'identifiant boutique vers le tiers, et non l'inverse : rien
+        // n'interdit à plusieurs liens de désigner le même tiers, indexer par fk_soc_doli
+        // en perdrait donc silencieusement.
+        $sql   = 'SELECT fk_customer_presta, fk_soc_doli FROM '.$table;
+        $sql  .= ' WHERE fk_presta = '.((int) $this->prestaShopId);
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
+            return -1;
+        }
+        $socByPrestaId = array();
+        while ($obj = $this->db->fetch_object($resql)) {
+            $prestaId = (string) $obj->fk_customer_presta;
+            $this->prestaIdsLinked[$prestaId] = true;
+            $socByPrestaId[$prestaId] = (int) $obj->fk_soc_doli;
+        }
+        $this->db->free($resql);
+
+        if (empty($socByPrestaId)) {
+            return 1;
+        }
+
+        // Parmi ces tiers, ceux qui existent encore et que la reprise n'a pas déjà pris
+        // en charge : ce sont les candidats à l'adoption. La liste des rowid est
+        // dédoublonnée, plusieurs identifiants boutique pouvant viser le même tiers.
+        $rowids = array_unique(array_map('intval', array_values($socByPrestaId)));
+
+        // price_level est relu ici, à sa valeur brute : Societe::fetch() la remplacerait
+        // par 1 lorsqu'elle est vide et que le multiprix est actif.
+        $eligible = array();
+        $sql   = 'SELECT rowid, price_level FROM '.MAIN_DB_PREFIX.'societe';
+        $sql  .= ' WHERE entity IN ('.getEntity('societe').')';
+        $sql  .= " AND (ref_ext IS NULL OR ref_ext NOT LIKE '".$this->db->escape($this->refExtPrefix)."%')";
+        $sql  .= ' AND rowid IN ('.implode(',', $rowids).')';
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
+            return -1;
+        }
+        while ($obj = $this->db->fetch_object($resql)) {
+            $rowid                           = (int) $obj->rowid;
+            $eligible[$rowid]                = true;
+            $this->priceLevelBySocId[$rowid] = (int) $obj->price_level;
+        }
+        $this->db->free($resql);
+
+        foreach ($socByPrestaId as $prestaId => $socid) {
+            if (isset($eligible[$socid])) {
+                $this->societeByPrestaId[$prestaId] = $socid;
+            }
+        }
+
+        return 1;
+    }
+
+    /**
+     * Attribue le prochain code tiers, au format du module de codification Monkey.
+     *
+     * Reproduit `mod_codeclient_monkey::getNextValue()` : préfixe, année et mois sur
+     * quatre chiffres, puis un compteur sur cinq chiffres — le remplissage disparaissant
+     * au-delà de 99 999, ce qui arrive nécessairement avec 157 000 tiers.
+     *
+     * Le maximum n'est interrogé qu'au premier appel : c'est tout l'intérêt.
+     *
+     * @param string $type 'client' ou 'fournisseur'
+     * @return string      Code attribué, chaîne vide si le maximum est illisible
+     */
+    protected function nextTiersCode($type)
+    {
+        $field  = ($type === 'fournisseur') ? 'code_fournisseur' : 'code_client';
+        $prefix = ($type === 'fournisseur') ? $this->codeFournisseurPrefix : $this->codeClientPrefix;
+
+        if ($this->codeCounters[$type] === null) {
+            $posindice = strlen($prefix) + 6;
+
+            $sql  = 'SELECT MAX(CAST(SUBSTRING('.$field.' FROM '.((int) $posindice).') AS SIGNED)) as max';
+            $sql .= ' FROM '.MAIN_DB_PREFIX.'societe';
+            $sql .= " WHERE ".$field." LIKE '".$this->db->escape($prefix)."____-%'";
+            $sql .= ' AND entity IN ('.getEntity('societe').')';
+
+            $resql = $this->db->query($sql);
+            if (!$resql) {
+                return '';
+            }
+            $obj = $this->db->fetch_object($resql);
+            $this->db->free($resql);
+
+            $this->codeCounters[$type] = ($obj && $obj->max !== null) ? (int) $obj->max : 0;
+        }
+
+        $this->codeCounters[$type]++;
+        $num = $this->codeCounters[$type];
+
+        // Monkey cesse de compléter à cinq chiffres au-delà de 99 999.
+        $suffix = ($num >= 100000) ? (string) $num : sprintf('%05d', $num);
+
+        return $prefix.dol_print_date(dol_now(), '%y%m', 'tzuserrel').'-'.$suffix;
+    }
+
+    /**
+     * Identifiant du client dans la boutique en ligne, pour une ligne source.
+     *
+     * `id_externe` porte cet identifiant. Les valeurs vides et « 0 » ne désignent aucun
+     * client : 1 540 tiers sont dans ce cas.
+     *
+     * @param stdClass $row Ligne source
+     * @return string       Identifiant, chaîne vide si inexploitable
+     */
+    protected function getPrestaCustomerId($row)
+    {
+        $id = trim((string) $row->id_externe);
+
+        if ($id === '' || $id === '0' || !ctype_digit($id)) {
+            return '';
+        }
+
+        return $id;
+    }
+
+    /**
+     * Déclare le tiers auprès de la boutique en ligne.
+     *
+     * Sans ce lien, la première commande du client ferait créer un second tiers par le
+     * module de synchronisation : celui-ci ne recherche aucun tiers existant, il crée
+     * directement (voir PrestaCustomer::createDoliObject). L'insertion reproduit à
+     * l'identique ce que fait PrestaCustomer::setCustomDolLink(), qui n'exécute qu'un
+     * INSERT sans traitement annexe.
+     *
+     * Un identifiant boutique ne peut désigner qu'un seul tiers : 313 valeurs
+     * d'`id_externe` sont partagées dans la source, les doublons sont donc écartés et
+     * comptés.
+     *
+     * @param int      $socid rowid du tiers venant d'être créé
+     * @param stdClass $row   Ligne source
+     * @return void
+     * @throws Exception Si l'insertion échoue
+     */
+    protected function registerPrestaLink($socid, $row)
+    {
+        if (!$this->prestaLinkAvailable || $socid <= 0) {
+            return;
+        }
+
+        $prestaId = $this->getPrestaCustomerId($row);
+        if ($prestaId === '') {
+            return;
+        }
+
+        if (isset($this->prestaIdsLinked[$prestaId])) {
+            $this->prestaIdConflicts++;
+            return;
+        }
+
+        $sql  = 'INSERT INTO '.MAIN_DB_PREFIX.'prestasync_customer';
+        $sql .= ' (fk_presta, fk_customer_presta, fk_soc_doli, date_creation, tms)';
+        $sql .= ' VALUES ('.((int) $this->prestaShopId).', '.((int) $prestaId).', '.((int) $socid).', NOW(), NOW())';
+
+        if (!$this->db->query($sql)) {
+            throw new Exception('Échec de l\'enregistrement du lien boutique : '.$this->db->lasterror());
+        }
+
+        $this->prestaIdsLinked[$prestaId] = true;
+        $this->prestaLinksCreated++;
+    }
+
+    /**
+     * Annonce l'action prévue en simulation, adoption comprise.
+     *
+     * @param stdClass $row        Ligne source
+     * @param int      $existingId rowid du tiers déjà repris, 0 sinon
+     * @return string
+     */
+    protected function previewAction($row, $existingId)
+    {
+        if ($existingId > 0) {
+            return 'updated';
+        }
+
+        $prestaId = $this->getPrestaCustomerId($row);
+        if ($prestaId !== '' && isset($this->societeByPrestaId[$prestaId])) {
+            return 'adopted';
+        }
+
+        return 'created';
+    }
+
+    /**
      * Rapport de fin de passage : libellés de pays non reconnus.
      *
      * @return array<int,string>
@@ -420,26 +707,23 @@ class MigrationThirdparty extends AeroMigrationRunner
             }
         }
 
+        if ($this->prestaLinksCreated > 0 || $this->prestaIdConflicts > 0) {
+            if ($lines) {
+                $lines[] = '';
+            }
+            $lines[] = 'Boutique en ligne :';
+            $lines[] = '  '.str_pad((string) $this->prestaLinksCreated, 6, ' ', STR_PAD_LEFT).'  lien(s) créé(s) dans llx_prestasync_customer';
+            if ($this->prestaIdConflicts > 0) {
+                $lines[] = '  '.str_pad((string) $this->prestaIdConflicts, 6, ' ', STR_PAD_LEFT).'  tiers non liés : identifiant boutique déjà attribué';
+            }
+        } elseif (!$this->prestaLinkAvailable) {
+            if ($lines) {
+                $lines[] = '';
+            }
+            $lines[] = 'Boutique en ligne : table de liaison absente, aucun rapprochement effectué.';
+        }
+
         return $lines;
-    }
-
-    /**
-     * Normalise un libellé pour le rapprochement : minuscules, sans accent, ponctuation
-     * et séparateurs ramenés à des espaces simples.
-     *
-     * C'est ce qui permet de traiter « Pays-Bas », « Pays bas » et « PAYS BAS » comme
-     * une seule et même valeur.
-     *
-     * @param string $label Libellé brut
-     * @return string       Libellé normalisé
-     */
-    protected function normalizeLabel($label)
-    {
-        $label = dol_string_unaccent((string) $label);
-        $label = strtolower($label);
-        $label = preg_replace('/[^a-z0-9]+/', ' ', $label);
-
-        return trim($label);
     }
 
     /**
@@ -588,6 +872,55 @@ class MigrationThirdparty extends AeroMigrationRunner
             return array('action' => 'updated', 'id' => $existingId);
         }
 
+        // ── Adoption d'un tiers venu de la boutique ────────────────────────
+        // Le tiers existe déjà dans Dolibarr, remonté par la synchronisation boutique.
+        // On ne le recrée pas — le code client déclencherait d'ailleurs une collision
+        // d'unicité — on le complète et on le rattache à la reprise.
+        $prestaId  = $this->getPrestaCustomerId($row);
+        $adoptedId = ($prestaId !== '' && isset($this->societeByPrestaId[$prestaId]))
+            ? $this->societeByPrestaId[$prestaId]
+            : 0;
+
+        // Un tiers ne peut être adopté qu'une fois, même si plusieurs identifiants
+        // boutique le désignent.
+        if ($adoptedId > 0 && isset($this->adoptedSocIds[$adoptedId])) {
+            $adoptedId = 0;
+        }
+
+        if ($adoptedId > 0) {
+            if ($societe->fetch($adoptedId) <= 0) {
+                throw new Exception('Tiers boutique introuvable (rowid '.$adoptedId.') : '.$this->objectErrors($societe));
+            }
+
+            // Niveau réellement stocké, et non celui restitué par fetch() qui vaut 1 par
+            // défaut dès que le multiprix est actif.
+            $currentLevel = isset($this->priceLevelBySocId[$adoptedId])
+                ? $this->priceLevelBySocId[$adoptedId]
+                : 0;
+
+            // Mode complétion : la fiche existante fait foi, on ne remplit que les vides.
+            $this->mapFields($societe, $row, true);
+            $societe->ref_ext = $this->buildRefExt($this->getSourceKey($row));
+
+            // Codes tiers laissés intacts : ceux attribués par la boutique font autorité.
+            $result = $societe->update($adoptedId, $this->user, 1, 0, 0);
+            if ($result <= 0) {
+                throw new Exception('Échec de l\'adoption : '.$this->objectErrors($societe));
+            }
+
+            // Même règle que les autres champs : on ne pose la catégorie tarifaire que si
+            // la fiche existante n'en a pas.
+            if ($currentLevel <= 0) {
+                $this->applyPriceLevel($societe, (int) $row->N_CatTarif, $currentLevel);
+            }
+
+            // Ce tiers ne doit plus être proposé à l'adoption d'une autre ligne source.
+            unset($this->societeByPrestaId[$prestaId]);
+            $this->adoptedSocIds[$adoptedId] = true;
+
+            return array('action' => 'adopted', 'id' => $adoptedId);
+        }
+
         $this->mapFields($societe, $row);
 
         // Trace de l'origine : c'est ce champ qui rend le script rejouable.
@@ -599,6 +932,9 @@ class MigrationThirdparty extends AeroMigrationRunner
         }
 
         $this->applyPriceLevel($societe, (int) $row->N_CatTarif, 0);
+
+        // Déclaration à la boutique, pour que ses futures commandes retrouvent ce tiers.
+        $this->registerPrestaLink((int) $societe->id, $row);
 
         return array('action' => 'created', 'id' => (int) $societe->id);
     }
@@ -664,12 +1000,13 @@ class MigrationThirdparty extends AeroMigrationRunner
      *   RGPD       rgpd_mail, rgpd_sms, Unsubscribe_Newsletter
      * ------------------------------------------------------------------------------
      *
-     * @param Societe  $societe Objet à alimenter
-     * @param stdClass $row     Ligne de f_comptet
+     * @param Societe  $societe  Objet à alimenter
+     * @param stdClass $row      Ligne de f_comptet
+     * @param bool     $fillOnly Mode complétion : ne renseigner que les champs vides
      * @return void
      * @throws Exception Si la ligne source ne permet pas de construire un tiers valide
      */
-    protected function mapFields(Societe $societe, $row)
+    protected function mapFields(Societe $societe, $row, $fillOnly = false)
     {
         $name = trim((string) $row->CT_Intitule);
         if ($name === '') {
@@ -680,7 +1017,11 @@ class MigrationThirdparty extends AeroMigrationRunner
         if ($name === '') {
             throw new Exception('Ni CT_Intitule ni CT_Num exploitables');
         }
-        $societe->name = $name;
+        // Le nom d'un tiers adopté n'est jamais remplacé : celui de la boutique est le
+        // nom sous lequel le client se connaît.
+        if (!$fillOnly) {
+            $societe->name = $name;
+        }
 
         // CT_Type : 0 = client (156 712 lignes), 1 = fournisseur (390). Le discriminant
         // est fiable : la codification le confirme (tout fournisseur a un CT_Num en
@@ -700,16 +1041,25 @@ class MigrationThirdparty extends AeroMigrationRunner
             $societe->fournisseur = 0;
         }
 
-        // Codes tiers : on reprend le code Sage tel quel plutôt que de laisser Dolibarr
-        // en générer un nouveau (ce que ferait la valeur -1). La référence historique
-        // reste ainsi lisible côté Dolibarr, et les rapprochements avec l'ancien ERP
-        // restent possibles pendant toute la durée de la bascule.
-        $code = trim((string) $row->CT_Num);
-        if (!empty($societe->client)) {
-            $societe->code_client = $code;
-        }
-        if (!empty($societe->fournisseur)) {
-            $societe->code_fournisseur = $code;
+        // Codes tiers : la valeur -1 demande à Dolibarr d'appliquer son module de
+        // codification. C'est le même masque que celui utilisé par la synchronisation
+        // boutique, ce qui évite toute collision — reprendre CT_Num heurterait de front
+        // l'index unique uk_societe_code_client sur les tiers déjà remontés.
+        // CT_Num reste conservé dans ref_ext, et pourra redevenir le code tiers plus tard
+        // si le client tient à ses références historiques.
+        // À la création uniquement : le code d'un tiers adopté ne se touche pas.
+        // Le code est calculé ici plutôt que laissé à Dolibarr (valeur -1) : son module
+        // de codification relit le maximum de la table à chaque création, ce qui rend la
+        // reprise quadratique. Voir nextTiersCode().
+        if (!$fillOnly && $societe->id <= 0) {
+            if (!empty($societe->client)) {
+                $code = $this->nextTiersCode('client');
+                $societe->code_client = ($code !== '') ? $code : -1;
+            }
+            if (!empty($societe->fournisseur)) {
+                $code = $this->nextTiersCode('fournisseur');
+                $societe->code_fournisseur = ($code !== '') ? $code : -1;
+            }
         }
 
         // ── Adresse ────────────────────────────────────────────────────────
@@ -721,20 +1071,22 @@ class MigrationThirdparty extends AeroMigrationRunner
         $complement = trim((string) $row->CT_Complement);
 
         if ($adresse !== '' && $complement !== '') {
-            $societe->address = $adresse."\n".$complement;
+            $address = $adresse."\n".$complement;
         } else {
-            $societe->address = ($adresse !== '') ? $adresse : $complement;
+            $address = ($adresse !== '') ? $adresse : $complement;
         }
 
-        $societe->zip  = trim((string) $row->CT_CodePostal);
-        $societe->town = trim((string) $row->CT_Ville);
+        $this->assign($societe, 'address', $address, $fillOnly);
+        $this->assign($societe, 'zip', trim((string) $row->CT_CodePostal), $fillOnly);
+        $this->assign($societe, 'town', trim((string) $row->CT_Ville), $fillOnly);
 
         // Pays laissé vide lorsque la source ne le renseigne pas ou que le libellé
         // n'est pas reconnu ; les libellés inconnus sont remontés en fin de passage.
-        $societe->country_id = $this->resolveCountry($row->CT_Pays);
+        $this->assign($societe, 'country_id', $this->resolveCountry($row->CT_Pays), $fillOnly);
 
-        // Département déduit du code postal, pour la France uniquement.
-        $societe->state_id = $this->resolveDepartement($societe->zip, $societe->country_id);
+        // Département déduit du code postal, pour la France uniquement. Il suit le pays
+        // effectivement retenu, qui peut être celui de la fiche existante en adoption.
+        $this->assign($societe, 'state_id', $this->resolveDepartement($societe->zip, $societe->country_id), $fillOnly);
 
         // CT_CodeRegion est ignoré : renseigné sur 81 lignes seulement sur 157 103, et
         // sans correspondance directe avec le référentiel Dolibarr.
@@ -743,11 +1095,11 @@ class MigrationThirdparty extends AeroMigrationRunner
         // Les numéros et adresses sont repris tels quels, sans filtrage : la source fait
         // foi, y compris pour ses valeurs de test (555-666-0606) et ses adresses
         // syntaxiquement invalides. Seule la mise en forme est normalisée.
-        $societe->phone        = $this->formatPhone($row->CT_Telephone, $row->prefixe_telephone);
-        $societe->phone_mobile = $this->formatPhone($row->Portable, $row->prefixe_portable);
-        $societe->fax          = $this->formatPhone($row->CT_Telecopie, $row->prefixe_telecopie);
-        $societe->email        = trim((string) $row->CT_EMail);
-        $societe->url          = $this->formatUrl($row->CT_Site);
+        $this->assign($societe, 'phone', $this->formatPhone($row->CT_Telephone, $row->prefixe_telephone), $fillOnly);
+        $this->assign($societe, 'phone_mobile', $this->formatPhone($row->Portable, $row->prefixe_portable), $fillOnly);
+        $this->assign($societe, 'fax', $this->formatPhone($row->CT_Telecopie, $row->prefixe_telecopie), $fillOnly);
+        $this->assign($societe, 'email', trim((string) $row->CT_EMail), $fillOnly);
+        $this->assign($societe, 'url', $this->formatUrl($row->CT_Site), $fillOnly);
 
         // ── Identifiants légaux ────────────────────────────────────────────
         // Champs très peu renseignés dans la source : 41 SIRET, 16 codes APE et 133
@@ -755,11 +1107,11 @@ class MigrationThirdparty extends AeroMigrationRunner
         // n'est donc pas repris.
         $siret = preg_replace('/[^0-9]/', '', (string) $row->CT_Siret);
         if ($siret !== '') {
-            $societe->idprof2 = $siret;
+            $this->assign($societe, 'idprof2', $siret, $fillOnly);
             // Le SIREN est les neuf premiers chiffres du SIRET. On ne le déduit que
             // d'un SIRET bien formé : 4 valeurs de la source ne le sont pas.
             if (strlen($siret) === 14) {
-                $societe->idprof1 = substr($siret, 0, 9);
+                $this->assign($societe, 'idprof1', substr($siret, 0, 9), $fillOnly);
             }
         }
 
@@ -772,26 +1124,30 @@ class MigrationThirdparty extends AeroMigrationRunner
         if ($identifiant !== '' && preg_match('/^[A-Za-z]{2}/', $identifiant)) {
             // La source panache les séparateurs : « BE0425.648.074 »,
             // « BE 0 430 246 468 », « FR 11 702 044 710 ».
-            $societe->tva_intra = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $identifiant));
+            $this->assign($societe, 'tva_intra', strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $identifiant)), $fillOnly);
         }
 
         // Code APE/NAF : la source alterne « 5811Z » et « 63.12Z ». On retire le point
         // pour aligner sur la forme attendue par Dolibarr.
         $ape = trim((string) $row->CT_Ape);
         if ($ape !== '') {
-            $societe->idprof3 = str_replace('.', '', $ape);
+            $this->assign($societe, 'idprof3', str_replace('.', '', $ape), $fillOnly);
         }
 
         // ── Nature du tiers ────────────────────────────────────────────────
         // CT_Qualite sert de civilité aux particuliers et de nature juridique aux
         // personnes morales. C'est le seul champ permettant de typer les tiers, et il
         // révèle que 94 % d'entre eux sont des particuliers.
-        $societe->typent_id = $this->resolveTypent($row->CT_Qualite);
+        $this->assign($societe, 'typent_id', $this->resolveTypent($row->CT_Qualite), $fillOnly);
 
         // ── Statut ─────────────────────────────────────────────────────────
         // CT_Sommeil marque les comptes mis en sommeil (88 tiers) : la logique est
         // inversée par rapport à Dolibarr, où status = 1 signifie « en activité ».
-        $societe->status = empty($row->CT_Sommeil) ? 1 : 0;
+        // En adoption, le statut de la fiche existante n'est jamais modifié : désactiver
+        // un client actif de la boutique aurait des conséquences immédiates.
+        if (!$fillOnly) {
+            $societe->status = empty($row->CT_Sommeil) ? 1 : 0;
+        }
 
         // La catégorie tarifaire (N_CatTarif) n'est pas traitée ici : ni create() ni
         // update() n'écrivent price_level, qui ne se pose que par setPriceLevel().
@@ -801,7 +1157,7 @@ class MigrationThirdparty extends AeroMigrationRunner
         // codes sont déduits des pays des tiers concernés (voir $currencyAliases).
         $currency = $this->resolveCurrency($row->N_Devise);
         if ($currency !== '') {
-            $societe->multicurrency_code = $currency;
+            $this->assign($societe, 'multicurrency_code', $currency, $fillOnly);
         }
 
         // CT_Encours n'est repris dans aucun champ : la colonne vaut 0 sur la totalité
@@ -810,14 +1166,14 @@ class MigrationThirdparty extends AeroMigrationRunner
         // ── Divers ─────────────────────────────────────────────────────────
         $commentaire = trim((string) $row->CT_Commentaire);
         if ($commentaire !== '') {
-            $societe->note_private = $commentaire;
+            $this->assign($societe, 'note_private', $commentaire, $fillOnly);
         }
 
         // Date de création d'origine. Dolibarr ne la remplace par la date du jour que
         // si elle est vide (societe.class.php:1044) et update() n'y touche jamais :
         // l'ancienneté réelle des comptes est donc préservée, y compris si la reprise
-        // est rejouée.
-        if (!empty($row->CT_DateCreate)) {
+        // est rejouée. Sans objet en adoption, la fiche existant déjà.
+        if (!$fillOnly && !empty($row->CT_DateCreate)) {
             $dateCreation = $this->db->jdate($row->CT_DateCreate);
             if ($dateCreation > 0) {
                 $societe->date_creation = $dateCreation;
@@ -826,37 +1182,29 @@ class MigrationThirdparty extends AeroMigrationRunner
     }
 
     /**
-     * Met un numéro de téléphone au format international lorsqu'un préfixe pays est
-     * renseigné dans la source.
+     * Affecte une valeur à une propriété de l'objet, en respectant le mode complétion.
      *
-     * Le zéro de tête d'un numéro national disparaît en notation internationale :
-     * « 0671834495 » avec le préfixe « 33 » devient « +33 671834495 ». Sans préfixe, le
-     * numéro est repris tel quel — c'est le cas de l'immense majorité des lignes, seules
-     * 37 d'entre elles portent un préfixe.
+     * En mode complétion (adoption d'un tiers venu de la boutique), la fiche existante
+     * fait autorité : on ne remplit que ce qu'elle a laissé vide. Une valeur source vide
+     * n'écrase jamais rien, quel que soit le mode.
      *
-     * @param string $number Numéro brut
-     * @param string $prefix Préfixe pays brut (« 33 », « +33 », « 852 »…)
-     * @return string        Numéro mis en forme, chaîne vide si la source est vide
+     * @param Societe $societe  Objet à alimenter
+     * @param string  $property Nom de la propriété
+     * @param mixed   $value    Valeur issue de la source
+     * @param bool    $fillOnly Mode complétion
+     * @return void
      */
-    protected function formatPhone($number, $prefix)
+    protected function assign(Societe $societe, $property, $value, $fillOnly)
     {
-        $number = trim((string) $number);
-        if ($number === '') {
-            return '';
+        if ($value === '' || $value === null || $value === 0) {
+            return;
         }
 
-        // Le préfixe est saisi tantôt « 33 », tantôt « +33 » : on ne garde que les
-        // chiffres avant de reconstruire la notation.
-        $prefix = preg_replace('/[^0-9]/', '', (string) $prefix);
-        if ($prefix === '') {
-            return $number;
+        if ($fillOnly && !empty($societe->$property)) {
+            return;
         }
 
-        if (substr($number, 0, 1) === '0') {
-            $number = ltrim(substr($number, 1));
-        }
-
-        return '+'.$prefix.' '.$number;
+        $societe->$property = $value;
     }
 
     /**

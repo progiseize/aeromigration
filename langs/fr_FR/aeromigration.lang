@@ -19,3 +19,4 @@ AeroMigAboutText=Module technique destiné à la reprise des données de l'ancie
 # Permissions
 Permission39999801=Consulter l'état de la reprise de données
 Permission39999802=Lancer un script de reprise de données
+AeroMigScriptContact=Contacts

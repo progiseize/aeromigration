@@ -61,5 +61,12 @@ function aeromigrationGetScripts()
             'class' => 'MigrationThirdparty',
             'file'  => '/aeromigration/class/migrationthirdparty.class.php',
         ),
+        // Dépend de la reprise des tiers : le rattachement se fait via leur ref_ext.
+        array(
+            'code'  => 'contact',
+            'label' => 'AeroMigScriptContact',
+            'class' => 'MigrationContact',
+            'file'  => '/aeromigration/class/migrationcontact.class.php',
+        ),
     );
 }

@@ -194,11 +194,12 @@ $runner->progressCallback = function ($stats, $cursor) use ($total) {
     $done = $stats['read'];
     $pct  = ($total > 0) ? round($done * 100 / $total, 1) : 0;
     printf(
-        "\r%7d/%-7d (%5.1f%%)  créés %-7d maj %-7d ignorés %-7d erreurs %-5d  curseur %-18s",
+        "\r%7d/%-7d (%5.1f%%)  créés %-7d adoptés %-6d maj %-6d ignorés %-7d erreurs %-5d  curseur %-18s",
         $done,
         $total,
         $pct,
         $stats['created'],
+        $stats['adopted'],
         $stats['updated'],
         $stats['skipped'],
         $stats['error'],
@@ -213,6 +214,7 @@ $duration = microtime(true) - $timeStart;
 echo "\n".str_repeat('-', 60)."\n";
 echo "Lus             : ".$runner->stats['read']."\n";
 echo "Créés           : ".$runner->stats['created']."\n";
+echo "Adoptés         : ".$runner->stats['adopted']."  (déjà présents, complétés)\n";
 echo "Mis à jour      : ".$runner->stats['updated']."\n";
 echo "Ignorés         : ".$runner->stats['skipped']."  (déjà migrés)\n";
 echo "En erreur       : ".$runner->stats['error']."\n";

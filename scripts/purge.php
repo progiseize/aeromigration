@@ -133,9 +133,37 @@ $runner = new $definition['class']($db, $user);
 $prefix = $runner->refExtPrefix;
 
 // Seule la table cible du script est concernée, et uniquement les lignes marquées.
-$targetTable = 'societe';
+$targetTable = $runner->getDstTable();
 
-$sql = 'SELECT rowid, nom, ref_ext FROM '.MAIN_DB_PREFIX.$targetTable;
+// Chaque table nomme sa désignation différemment, et la classe métier à instancier en
+// dépend : on ne supprime jamais en SQL direct.
+// Attention aux signatures de delete(), qui diffèrent d'une classe à l'autre :
+// Societe::delete($id, $user) attend l'identifiant en premier, Contact::delete($user)
+// attend l'utilisateur. D'où la clé 'delete_arg'.
+$targets = array(
+    'societe' => array(
+        'label'      => 'nom',
+        'class'      => 'Societe',
+        'file'       => '/societe/class/societe.class.php',
+        'delete_arg' => 'id',
+    ),
+    'socpeople' => array(
+        'label'      => "CONCAT_WS(' ', lastname, firstname)",
+        'class'      => 'Contact',
+        'file'       => '/contact/class/contact.class.php',
+        'delete_arg' => 'user',
+    ),
+);
+
+if (!isset($targets[$targetTable])) {
+    echo "Table cible non prise en charge par la purge : ".$targetTable."\n";
+    exit(1);
+}
+
+$target = $targets[$targetTable];
+require_once DOL_DOCUMENT_ROOT.$target['file'];
+
+$sql = 'SELECT rowid, '.$target['label'].' as nom, ref_ext FROM '.MAIN_DB_PREFIX.$targetTable;
 $sql .= " WHERE entity IN (".getEntity($targetTable).")";
 $sql .= " AND ref_ext LIKE '".$db->escape($prefix)."%'";
 $sql .= ' ORDER BY rowid';
@@ -146,17 +174,18 @@ if (!$resql) {
     exit(1);
 }
 
-$targets = array();
+$rows = array();
 while ($obj = $db->fetch_object($resql)) {
-    $targets[] = $obj;
+    $rows[] = $obj;
 }
 $db->free($resql);
 
 echo "Script     : ".$definition['code']."\n";
+echo "Table      : ".MAIN_DB_PREFIX.$targetTable."\n";
 echo "Marqueur   : ref_ext commençant par « ".$prefix." »\n";
-echo "Concernés  : ".count($targets)." enregistrement(s)\n";
+echo "Concernés  : ".count($rows)." enregistrement(s)\n";
 
-if (empty($targets)) {
+if (empty($rows)) {
     echo "Rien à supprimer.\n";
     $db->close();
     exit(0);
@@ -178,31 +207,38 @@ $deleted = 0;
 $failed  = 0;
 $errors  = array();
 
-foreach ($targets as $target) {
-    $societe = new Societe($db);
-    if ($societe->fetch((int) $target->rowid) <= 0) {
+$className = $target['class'];
+
+foreach ($rows as $row) {
+    /** @var Societe|Contact $object */
+    $object = new $className($db);
+    if ($object->fetch((int) $row->rowid) <= 0) {
         $failed++;
-        $errors[] = $target->ref_ext.' : chargement impossible';
+        $errors[] = $row->ref_ext.' : chargement impossible';
         continue;
     }
 
     $db->begin();
-    $result = $societe->delete((int) $target->rowid, $user);
+    if ($target['delete_arg'] === 'user') {
+        $result = $object->delete($user);
+    } else {
+        $result = $object->delete((int) $row->rowid, $user);
+    }
     if ($result > 0) {
         $db->commit();
         $deleted++;
     } else {
         $db->rollback();
         $failed++;
-        $message = !empty($societe->error) ? $societe->error : 'erreur inconnue';
-        if (!empty($societe->errors)) {
-            $message .= ' | '.implode(' | ', $societe->errors);
+        $message = !empty($object->error) ? $object->error : 'erreur inconnue';
+        if (!empty($object->errors)) {
+            $message .= ' | '.implode(' | ', $object->errors);
         }
-        $errors[] = $target->ref_ext.' : '.$message;
+        $errors[] = $row->ref_ext.' : '.$message;
     }
 
     if (($deleted + $failed) % 200 === 0) {
-        printf("\r  %d/%d traité(s)   ", $deleted + $failed, count($targets));
+        printf("\r  %d/%d traité(s)   ", $deleted + $failed, count($rows));
     }
 }
 
