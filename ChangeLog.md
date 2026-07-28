@@ -6,6 +6,98 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.5.0] — 2026-07-28
+
+### Reprise des tarifs fournisseurs
+
+- **Nouveau script `supplierprice`** : les 15 962 lignes de `f_artfourniss` deviennent des
+  références et des prix d'achat sur les fiches produit. Les deux extrémités sont retrouvées
+  par leur `ref_ext` — jamais par la référence produit, reformatée en `#00001`, ni par le
+  code fournisseur, régénéré par Dolibarr.
+- **Prix d'achat enfin repris.** Il avait été volontairement écarté de la reprise des
+  articles : il relève du couple produit/fournisseur, pas de l'article.
+- **Les devises sont conservées** — 594 lignes en dollars, 13 en dollars canadiens, 7 en
+  livres.
+
+### Deux pièges désamorcés
+
+**Un index unique que 3 108 lignes violent.** Dolibarr identifie une ligne tarifaire par
+`(ref_fourn, fk_soc, quantity)` : il postule qu'une référence désigne un seul article chez
+un fournisseur. La source ne respecte pas ce postulat — 1 033 lignes partagent une référence
+et 2 128 n'en ont aucune. Chez F274, seize articles portent la référence `Chemise`, ce sont
+les tailles d'un même chemisier. Or `update_buyprice()` appelé sans identifiant de ligne
+**supprime la place occupée avant d'insérer** : près de 2 600 lignes auraient disparu sans
+la moindre erreur, le rapport annonçant un succès complet.
+
+- Les références partagées sont **désambiguïsées par la référence du produit** —
+  `Chemise (#10475)` —, celles qui manquent ou ne veulent rien dire (`---`, `///`, `.`)
+  sont remplacées par elle. Les collisions sont repérées avant le parcours, un traitement
+  par lots ne pouvant les voir passer autrement.
+- La carte des collisions est construite **en PHP et non en SQL** : `TRIM()` de MySQL ne
+  retire pas les tabulations, contrairement à PHP, et six références en portent. Une
+  détection en SQL aurait laissé passer ces cas-là.
+- **`update_buyprice()` ne part jamais en mode insertion.** `add_fournisseur()` est appelé
+  d'abord, ce qui pose l'identifiant de ligne et neutralise la branche destructrice. Une
+  collision venue de la cible plutôt que de la source — ligne posée par la boutique, saisie
+  manuelle — est détectée avant écriture.
+- Contrôle de recette dédié : le nombre de lignes en base doit égaler créations plus
+  adoptions. Un écart est la signature exacte de la suppression silencieuse.
+
+**Le multidevise décide du prix en euros.** Le module étant actif, `update_buyprice()`
+exécute toujours `prix = prix en devise / taux` : le prix en euros qu'on lui fournit est
+ignoré, et ne rien passer côté devise écrit un tarif **à zéro**.
+
+- Le taux implicite de la source varie de 0,28 à 2,17 sur une même devise. Il est conservé
+  lorsqu'il approche celui de l'instance à 20 % près — les deux prix sont alors ceux de la
+  source, au centime —, remplacé par le taux officiel sinon. Sur les données actuelles,
+  397 lignes gardent leur taux et 91 basculent, chaque bascule étant signalée.
+- Les lignes annonçant une devise sans montant en devise repartent en euros.
+
+### Idempotence sans `ref_ext`
+
+La table cible n'a pas de `ref_ext`. Le marqueur va donc dans `import_key`, prévue pour cela
+par le coeur et écrite via l'API `ProductFournisseurPrice` — la règle du module, aucune
+écriture SQL directe, reste tenue. La clé y désigne **la ligne source** et non le couple
+article/fournisseur : quatre articles sont référencés deux fois chez un même fournisseur,
+avec deux références et deux prix, ce qu'une clé par couple aurait fait s'écraser à chaque
+passage.
+
+Les lignes déjà présentes en base ne sont pas marquées : la reprise les complète sans les
+revendiquer, et la purge ne les supprimera pas.
+
+### Ce que la reprise ne fait pas
+
+- `PRODUCT_USE_SUPPLIER_PACKAGING` n'est **pas** activée, bien que le conditionnement soit
+  repris dans `packaging` : cette constante modifie l'arrondi des quantités d'achat pour
+  toute l'instance, c'est un arbitrage du client.
+- `AF_TypeRem` étant vide sur toute la table, rien ne prouve que `AF_Remise` soit un
+  pourcentage. Les 58 valeurs sont reprises comme telles et listées au rapport pour
+  validation.
+
+### Corrigé
+
+- **Le coût de revient était pris dans la mauvaise colonne.** Le script `product`
+  privilégiait `AR_PrixRU`, dont le nom promet un prix de revient, et ne basculait sur
+  `AR_CoutStd` qu'en dessous du centime. Or la source ne recalcule jamais `AR_PrixRU`
+  quand le tarif fournisseur change : **2 767 articles sur 13 814 portaient ainsi un coût
+  inférieur à leur propre prix d'achat** — l'article 10514 affichait 35,26 € pour un achat
+  à 75,92 €. Un coût sous-évalué gonfle la marge que Dolibarr affiche.
+
+  La preuve est dans la marge : rapporté au prix de vente, le prix d'achat donne un
+  coefficient moyen de 1,84, quand le prix de revient en donne un de plusieurs millions.
+  `AR_CoutStd`, lui, égale exactement le prix d'achat sur 11 836 articles, et ne compte
+  aucune valeur aberrante là où `AR_PrixRU` en a 1 628. **La règle est inversée** : coût
+  standard d'abord, prix de revient en repli pour les 14 articles qui n'en ont pas.
+
+- **`supplierprice` signale les achats au-dessus du prix de vente.** 54 articles sont
+  achetés plus cher qu'ils ne sont vendus. Impossible de savoir lequel des deux prix est
+  faux : ils sont listés nommément en fin de passage, pour vérification par le client.
+
+- Le récapitulatif de `migrate.php` annonçait les lignes ignorées comme « déjà migrées ».
+  C'est faux dès qu'un script écarte une ligne qu'il ne sait pas rattacher : le libellé ne
+  préjuge plus de la cause, que le rapport détaille.
+
+
 ## [0.4.0] — 2026-07-28
 
 ### Reprise du catalogue

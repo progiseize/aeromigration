@@ -221,7 +221,10 @@ echo "Lus             : ".$runner->stats['read']."\n";
 echo "Créés           : ".$runner->stats['created']."\n";
 echo "Adoptés         : ".$runner->stats['adopted']."  (déjà présents, complétés)\n";
 echo "Mis à jour      : ".$runner->stats['updated']."\n";
-echo "Ignorés         : ".$runner->stats['skipped']."  (déjà migrés)\n";
+// « Ignorés » ne veut pas dire « déjà migrés » partout : un script peut aussi écarter une
+// ligne qu'il ne sait pas rattacher. C'est le rapport de fin de passage qui en donne la
+// ventilation, le récapitulatif se garde d'en préjuger.
+echo "Ignorés         : ".$runner->stats['skipped']."\n";
 echo "En erreur       : ".$runner->stats['error']."\n";
 echo "Durée           : ".round($duration, 1)." s\n";
 echo "Dernier curseur : ".$runner->lastCursor."\n";

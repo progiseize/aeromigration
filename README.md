@@ -28,6 +28,7 @@ php migrate.php contact        contacts        → rattachés aux tiers
 php migrate.php newsletter     désinscriptions → enrichit les tiers
 php migrate.php category       catalogue
 php migrate.php product        articles        → rattachés aux catégories
+php migrate.php supplierprice  tarifs fournisseurs → relient articles et tiers
 ```
 
 | Script | Dépend de | Ce qui se passe s'il est lancé trop tôt |
@@ -37,10 +38,13 @@ php migrate.php product        articles        → rattachés aux catégories
 | `newsletter` | `thirdparty` | s'arrête avec un message explicite |
 | `category` | — | |
 | `product` | `category` | les articles sont créés **sans classement**, et le rapport le signale |
+| `supplierprice` | `thirdparty`, `product` | les lignes sans article ni tiers repris sont ignorées, et le rapport les dénombre |
 
-Seul `product` reste tolérant : un article sans catégorie demeure un article valide, et
-l'on peut vouloir reprendre les produits seuls. Le rapport de fin de passage indique alors
-clairement qu'aucune catégorie n'a été trouvée.
+Les deux derniers restent tolérants. Un article sans catégorie demeure un article valide, et
+l'on peut vouloir reprendre les produits seuls ; le rapport indique alors clairement
+qu'aucune catégorie n'a été trouvée. De même, un tarif dont l'article n'est pas encore repris
+n'est pas une erreur mais une ligne à repasser plus tard : le script la compte, la signale et
+poursuit. Il est rejouable autant de fois que nécessaire.
 
 ## Lancer une reprise
 
@@ -86,6 +90,17 @@ C'est la **seule écriture SQL directe** du module, à rebours de la règle gén
 assumée : `PrestaCustomer::setCustomDolLink()` n'exécute qu'un `INSERT` sans traitement
 annexe, et passer par la classe imposerait d'ouvrir une connexion webservice vers la
 boutique pour chacun des ~135 000 tiers.
+
+## Idempotence : `ref_ext`, et `import_key` par exception
+
+Chaque objet créé porte la clé de son enregistrement source dans `ref_ext`, préfixée
+« SAGE: ». C'est ce qui rend les scripts rejouables sans table de correspondance dédiée.
+
+`llx_product_fournisseur_price` fait exception : cette table n'a pas de `ref_ext`. Le
+script `supplierprice` se rabat sur `import_key`, prévue pour cela par le coeur et écrite
+par l'API `ProductFournisseurPrice`, sans requête directe. Le marqueur y désigne **la ligne
+source** (`SAGE:<cbMarq>`) et non le couple article/fournisseur : quatre articles sont
+référencés deux fois chez un même fournisseur, avec deux références et deux prix distincts.
 
 ## Anomalies de la source
 

@@ -89,5 +89,13 @@ function aeromigrationGetScripts()
             'class' => 'MigrationProduct',
             'file'  => '/aeromigration/class/migrationproduct.class.php',
         ),
+        // Dépend des tiers ET des articles : les deux extrémités d'un tarif se retrouvent
+        // par leur ref_ext. Les lignes dont l'une manque sont ignorées et signalées.
+        array(
+            'code'  => 'supplierprice',
+            'label' => 'AeroMigScriptSupplierPrice',
+            'class' => 'MigrationSupplierPrice',
+            'file'  => '/aeromigration/class/migrationsupplierprice.class.php',
+        ),
     );
 }

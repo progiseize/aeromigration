@@ -83,9 +83,11 @@ fait autorité. Le script ne pose le rattachement que s'il est vide.
 | A3 | Colonnes `disponibilite_origine` / `suivi_origine` incohérentes | 828 | Écartées |
 | A4 | Taux de TVA absent de la table | 828 | Déduit de la famille |
 | A5 | Non-renseignés déguisés en « #N/A » et « undefined » | ~20 100 | Écartés |
-| A6 | Références orphelines dans les tables liées | ~894 000 | À arbitrer lors des reprises suivantes |
-| A7 | Trois notions de coût pour un seul `cost_price` | 15 113 | Prix de revient retenu |
+| A6 | Références orphelines dans les tables liées | 618 | Écartées et signalées |
+| A9 | Déclinaisons créées en articles indépendants | 371 groupes | Constaté, hors périmètre |
+| A7 | Prix de revient périmé, inférieur au prix d'achat | 2 767 | Coût standard retenu à sa place |
 | A8 | `f_consigne` : stock en dépôt-vente, pas des consignes | 279 | À traiter avec les stocks |
+| A10 | Articles achetés plus cher qu'ils ne sont vendus | 54 | Signalés, non traités |
 
 ### A1. Trois traitements selon l'origine de l'article
 
@@ -213,18 +215,59 @@ La source distingue le prix d'achat brut (`AR_PrixAch`), le prix de revient unit
 Les trois diffèrent réellement : le prix de revient s'écarte du prix d'achat dans 9 236
 cas, et du coût standard dans 4 866.
 
+**Décision : c'est le COÛT STANDARD qui alimente `cost_price`**, le prix de revient ne
+servant que de repli. C'est contre-intuitif — son nom promet mieux — mais la source est
+formelle : **`AR_PrixRU` n'est jamais recalculé quand le tarif fournisseur change.**
+
 ```
-Casque AC-200 :  achat 50,69   revient 69,92   coût standard 69,92   vente 119,00
+10514  Maquette A350-1000       revient 35,26   coût standard 75,92   achat F261 75,92
 ```
 
-**Décision : c'est le prix de revient qui alimente `cost_price`**, puisqu'il intègre les
-frais et donne une marge juste. Le prix d'achat relève du couple produit/fournisseur et
-sera repris avec les tarifs fournisseurs.
+Sur les 13 814 articles ayant un fournisseur principal tarifé, **2 767 (20 %) portent un
+prix de revient inférieur à leur propre prix d'achat**. Le coût standard, lui, suit : il
+égale exactement le prix d'achat sur 11 836 articles (86 %).
 
-**1 628 prix de revient sont aberrants**, inférieurs au centime — jusqu'à `0,000001 €`
-pour un article dont le coût standard vaut `4,19 €`. Le coût standard prend alors le
-relais, ce qui récupère 1 458 de ces cas ; les 170 restants n'ont de valeur exploitable
-dans aucune des deux colonnes.
+La preuve tient dans la marge, mesurée sur ces 2 767 articles :
+
+| Coût retenu | Coefficient moyen prix de vente / coût |
+|---|---|
+| Prix d'achat fournisseur | **1,84** — une marge commerciale plausible |
+| `AR_PrixRU` | 14 489 208 — absurde |
+
+Le coût standard est aussi le plus propre des deux : **14 906 valeurs exploitables contre
+13 152**, et **aucune sous le centime contre 1 628**. Les 1 628 valeurs aberrantes du prix
+de revient — jusqu'à `0,000001 €` pour un article à `4,19 €` — disparaissent d'elles-mêmes
+du calcul.
+
+Le prix de revient sert de repli pour les **14 articles** sans coût standard exploitable.
+**837 articles** n'ont de valeur dans aucune des deux colonnes et restent sans coût.
+
+**Ce qui n'est pas corrigé** : 1 318 articles gardent un coût standard lui aussi inférieur
+à leur prix d'achat. Forcer la valeur au prix d'achat aurait été possible, mais c'eût été
+inventer une donnée que la source ne porte pas. Ils sont laissés tels quels — sur les 600
+produits de développement, cela représente 67 fiches dont la marge affichée reste optimiste.
+
+> **Correction d'une décision antérieure.** La règle initiale privilégiait le prix de
+> revient et ne basculait sur le coût standard qu'en dessous du centime. Elle laissait donc
+> passer tous les prix de revient périmés mais plausibles — comme les 35,26 € de l'article
+> 10514. La règle est exactement inversée depuis.
+
+### A10. Des articles achetés plus cher qu'ils ne sont vendus
+
+Le prix d'achat du fournisseur principal dépasse le prix de vente HT sur **54 articles**.
+
+```
+#10177  achat 134,17 chez F23    vente 97,50
+#10395  achat   7,00 chez F87    vente  3,79
+#10463  achat   7,10 chez F20    vente  4,73
+```
+
+Rien ne permet de trancher : c'est peut-être un tarif fournisseur périmé à la hausse, un
+prix de vente jamais réajusté, ou une vente à perte assumée sur du déstockage. La reprise
+n'y touche donc pas — elle les liste nommément dans le rapport de `supplierprice`, et la
+marge apparaîtra négative dans Dolibarr, ce qui a le mérite de les rendre visibles.
+
+**À faire vérifier par le client, article par article.**
 
 ### A8. `f_consigne` : du stock en dépôt-vente, pas des consignes
 
@@ -254,17 +297,221 @@ poseront :
 
 ### A6. Références orphelines dans les tables liées
 
-La réduction de `f_article` laisse les tables liées pointer massivement dans le vide :
+Relevé refait le 28/07/2026, sur `f_article` complète (15 812 articles) :
 
-| Table | Lignes | Orphelines |
+| Table | Lignes | Orphelines de `f_article` |
 |---|---:|---:|
-| `f_docligne_global` | 1 039 279 | 851 765 (82 %) |
-| `f_artstock` | 27 670 | 26 497 (96 %) |
-| `f_artfourniss` | 15 962 | 15 545 (97 %) |
+| `f_docligne_global` | 1 039 279 | 584 |
+| `f_artstock` | 27 670 | 29 |
+| `f_artfourniss` | 15 962 | 5 |
 
-C'est cohérent avec le périmètre retenu, ces lignes concernant les articles venus de la
-boutique. **À arbitrer lors de la reprise des stocks et des documents commerciaux** : les
-rattacher aux produits issus de PrestaShop, ou les écarter.
+Ces lignes-là sont de vraies anomalies, définitives : rien ne les résorbera, aucun article ne
+porte plus ces références. Elles sont écartées et signalées nommément par les rapports de
+reprise.
+
+> **Correction d'un relevé antérieur.** Ce tableau annonçait des taux de 82 à 97 %. Ils ne
+> mesuraient pas des orphelines de `f_article` mais des lignes sans produit **migré** à un
+> instant donné, alors que `f_article` avait été temporairement réduite à 828 articles et que
+> 417 produits seulement existaient en cible. Deux choses distinctes, que la formulation
+> confondait. Le nombre de lignes sans produit repris reste évidemment élevé tant que
+> `migrate.php product` n'a pas été passé en entier — c'est un ordonnancement, pas une
+> anomalie, et les rapports le disent explicitement.
+
+### A9. Des déclinaisons créées en articles indépendants
+
+Sage sait gérer les gammes : `AR_Gamme1` désigne l'article porteur, `f_artgamme` en énumère
+les déclinaisons. Le mécanisme n'a quasiment pas servi — **209 articles sur 15 812**.
+
+Le reste du temps, les tailles et variantes ont été créées en articles séparés, la variante
+étant écrite dans le libellé. Les deux modélisations coexistent parfois dans la même famille
+de produits :
+
+```
+10476  Chemisier avion rouge F.F.A. brodé            AR_Gamme1 = 1   → XS, S, M, XL
+10475  Chemisier avion rouge F.F.A. brodé - Taille L AR_Gamme1 = 0
+10479  Chemisier avion rouge F.F.A. brodé - Taille M AR_Gamme1 = 0
+10480  Chemisier avion rouge F.F.A. brodé - Taille XL AR_Gamme1 = 0
+```
+
+Quelqu'un a commencé à déclarer une gamme sur `10476`, puis on a continué à créer des
+articles à côté.
+
+C'est ce qui explique l'essentiel des collisions de référence fournisseur (voir F1) : seize
+articles portent la référence `Chemise` chez F274 parce que le fournisseur, lui, ne vend
+qu'un modèle. Sur les 371 groupes en collision, 34 seulement impliquent un article à gamme.
+
+**Constaté, non traité.** Basculer ces articles vers les variantes Dolibarr — module activé
+mais vierge, aucun attribut ni combinaison — supposerait de fusionner des produits **déjà
+synchronisés avec PrestaShop**, chacun avec son identifiant boutique, ses commandes et son
+historique. C'est une restructuration du catalogue, à arbitrer avec le client, pas un
+effet de bord d'une reprise de prix d'achat.
+
+---
+
+## Tarifs fournisseurs (`f_artfourniss`)
+
+| # | Anomalie | Volume | Décision |
+|---|---|---:|---|
+| F1 | Une référence fournisseur pour plusieurs articles | 1 033 | Suffixée par la référence produit |
+| F2 | Référence fournisseur absente ou vide de sens | 2 159 | Remplacée par la référence produit |
+| F3 | Taux de change implicites incohérents | 91 | Taux de l'instance appliqué |
+| F4 | Prix d'achat absent ou nul | 1 512 | Ligne créée, tarif à zéro |
+| F5 | Clés inexploitables (`CT_Num` vide ou inconnu, `AR_Ref` orphelin) | 12 | Écartées et listées |
+| F6 | `AF_QteMini` et `AF_Colisage` font double emploi | 15 962 | Une seule reprise |
+| F7 | `AF_Remise` sans `AF_TypeRem` | 58 | Repris en pourcentage, à valider |
+| F8 | Tabulations dans les références | 6 | Nettoyées |
+
+### F1. Une référence fournisseur pour plusieurs articles
+
+C'est **l'anomalie structurante** de cette table, parce qu'elle heurte de front la façon
+dont Dolibarr identifie une ligne tarifaire : `uk_product_fournisseur_price_ref` porte sur
+`(ref_fourn, fk_soc, quantity)`. Une référence y désigne un seul article chez un
+fournisseur donné.
+
+**1 033 lignes** violent ce postulat, réparties en 371 groupes, jusqu'à 17 articles sur une
+même valeur :
+
+```
+F255  BAL-A P488-029        17 articles
+F274  Chemise               16 articles   (les tailles d'un chemisier, cf. A9)
+F88   CC001                 13 articles
+F112  ---                   11 articles
+F22   3813                   9 articles
+```
+
+Certaines sont de vraies références de gamme, d'autres du pur bruit de saisie.
+
+**Le piège n'est pas l'index, c'est le silence.** `ProductFournisseur::update_buyprice()`
+appelé sans `product_fourn_price_id` exécute un `DELETE` sur la place occupée **avant** son
+`INSERT` (fournisseur.product.class.php:618). La seconde ligne ne provoque donc aucune
+erreur : elle fait disparaître la première. Sur l'ensemble de la source, environ **2 600
+lignes se seraient évaporées** en laissant les compteurs annoncer un succès complet.
+
+Décision : la référence est conservée quand elle est unique chez le fournisseur, et
+désambiguïsée par la référence du produit sinon — `Chemise (#10475)`. La détection se fait
+avant le parcours, un traitement par lots ne pouvant repérer autrement deux lignes en
+conflit tombées dans des lots différents.
+
+### F2. Référence fournisseur absente ou vide de sens
+
+**2 128 lignes** n'ont aucune référence, et 31 portent une valeur qui n'en est pas une :
+`---`, `///`, `//`, `////`. Pour Dolibarr, vingt lignes à référence vide chez un même
+fournisseur sont la même ligne vingt fois — F20 en compte justement vingt.
+
+La référence du produit prend le relais. Elle est unique par construction : un article
+n'apparaît jamais deux fois sans référence chez le même fournisseur.
+
+### F3. Taux de change implicites incohérents
+
+La source porte les deux prix — `AF_PrixAch` en euros et `AF_PrixDev` en devise — mais pas
+le taux qui les relie. Or Dolibarr **recalcule** le prix en euros par
+`prix en devise / taux` : c'est le taux qui décide de la valeur stockée.
+
+Le rapport `AF_PrixDev / AF_PrixAch` varie de **0,28 à 2,17 sur une même devise**, là où le
+taux de l'instance vaut 1,075 pour le dollar. Une partie des valeurs est crédible, le reste
+est manifestement faux.
+
+| Devise | Lignes avec les deux prix | Taux plausible | Aberrant |
+|---|---:|---:|---:|
+| USD | 469 | 385 | 84 |
+| CAD | 13 | 11 | 2 |
+| GBP | 6 | 1 | 5 |
+
+Décision : le taux de la source est repris s'il est à moins de 20 % de celui de l'instance —
+les deux prix sont alors ceux de la source, au centime. Sinon le taux officiel s'applique et
+le prix en euros est recalculé, l'écart étant signalé au rapport.
+
+Cas particuliers : **123 lignes** annoncent une devise sans montant en devise (elles
+repartent en euros), **100** ont l'inverse (le taux officiel est la seule voie).
+
+À noter : `AF_Devise = 1` désigne l'euro, comme sur les tiers. Vérifié — sur les 74 lignes
+concernées portant les deux prix, 68 ont `AF_PrixDev` égal à `AF_PrixAch`.
+
+### F4. Prix d'achat absent ou nul
+
+**1 295 lignes** à zéro, **217** nulles. La ligne est créée quand même : la référence
+fournisseur vaut à elle seule d'être reprise, et un tarif à zéro est visible et corrigeable
+depuis la fiche produit.
+
+### F5. Clés inexploitables
+
+- **3 lignes sans `CT_Num`** (cbMarq 12129, 12290, 12528) : rattachables à rien, écartées à
+  la lecture.
+- **4 `CT_Num` absents de `f_comptet`** : `Andre Rooney`, `DENOD`, `Le comptoir du li`
+  (tronqué à 17 caractères par la colonne) et `F990000054`. Les trois premiers sont
+  visiblement de la saisie libre à la place d'un code ; le quatrième en a pourtant
+  l'apparence.
+- **5 `AR_Ref` absents de `f_article`** : 11879, 11899, 11952, 12011, 12656.
+
+Aucun n'est traité en erreur : rien ne les résorbera, et cinq lignes d'erreur masqueraient
+les vraies. Ils sont comptés et listés nommément.
+
+### F6. `AF_QteMini` et `AF_Colisage` font double emploi
+
+Les deux colonnes sont **rigoureusement identiques** sur les 15 962 lignes — mêmes valeurs,
+mêmes distributions, zéro divergence. C'est la même information saisie deux fois : le
+conditionnement. 269 lignes portent une valeur supérieure à 1 (2, 3, 4, 5, 6, 10, 12, 16, 20,
+24, 40, 48, 50, 60, 72, 96, 100, 120, 288).
+
+Reprise dans `packaging`, mais **`PRODUCT_USE_SUPPLIER_PACKAGING` n'est pas activée** par la
+reprise : cette constante modifie l'arrondi des quantités d'achat pour toute l'instance,
+c'est un arbitrage du client. La donnée est stockée, elle s'activera le jour voulu.
+
+### F7. `AF_Remise` sans `AF_TypeRem`
+
+58 lignes portent une remise, valeurs de 2 à 33,5 — cohérentes avec des pourcentages. Mais
+**`AF_TypeRem` est NULL sur les 15 962 lignes** : rien ne prouve qu'il s'agisse d'un taux
+plutôt que d'un montant.
+
+Repris en pourcentage, et listé au rapport pour validation client. Le risque est borné :
+Dolibarr n'en déduit pas le prix unitaire, la remise ne joue que sur les lignes de commande
+fournisseur.
+
+### F8. Tabulations dans les références
+
+Six références portent une tabulation en tête ou en fin — `\t9782373011173`, `52641\t` —,
+et huit autres des espaces de bord.
+
+Anecdotique en soi, structurant pour le code : **`TRIM()` de MySQL ne retire pas les
+tabulations**, contrairement à `trim()` de PHP. Une carte des collisions construite par
+agrégation SQL n'aurait donc pas coïncidé avec les clés calculées à l'exécution, et ces
+lignes seraient passées à travers la détection. Le nettoyage est fait par une fonction PHP
+unique, autorité sur la forme d'une référence en préparation comme à l'écriture.
+
+### F9. Colonnes sans emploi
+
+`AF_TypeRem`, `AF_Garantie` et `EG_Champ` sont NULL sur les 15 962 lignes. `AF_Unite` ne
+vaut `1` que sur 710 lignes, `AF_Conversion` et `AF_ConvDiv` sont entièrement nulles.
+`designation_fournisseur` n'est renseignée que 206 fois, `AF_DelaiAppro` 14 fois,
+`AF_CodeBarre` 4 fois. Les colonnes de tarif futur (`AF_PrixAchNouv`, `AF_RemiseNouv`,
+`AF_DateApplication`) ne sont pas reprises : Dolibarr n'a pas de notion équivalente.
+
+---
+
+## Pièges Dolibarr rencontrés
+
+### P1. `purge.php product --confirm` détruit des produits de la boutique
+
+`MigrationProduct` pose `ref_ext = 'SAGE:…'` sur les produits **adoptés**, c'est-à-dire ceux
+que PrestaShop avait créés et que la reprise a complétés. Or la purge du socle supprime tout
+ce qui porte ce marqueur, sans distinguer création et adoption.
+
+En développement c'est sans conséquence. **En production, cette commande supprimerait des
+produits de la boutique.** À traiter avant toute mise en production : soit distinguer les
+adoptions par un second marqueur, soit refuser la purge hors développement.
+
+Le script `supplierprice` ne souffre pas de ce défaut : il ne marque jamais une ligne
+préexistante, et sa purge est donc bornée à ce qu'il a lui-même créé.
+
+### P2. `llx_product_fournisseur_price_log` n'est jamais nettoyée
+
+`remove_product_fournisseur_price()` supprime la ligne tarifaire, pas son journal, et aucune
+API ne le permet. Chaque purge laisse donc des lignes de log orphelines — il y en avait déjà
+quatre, issues d'essais manuels.
+
+Sans gravité fonctionnelle, mais trompeur : `rowid` étant auto-incrémenté, un journal
+orphelin peut se retrouver rattaché à une ligne tarifaire ultérieure sans rapport. À nettoyer
+à la main en développement.
 
 ---
 

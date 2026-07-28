@@ -103,6 +103,9 @@ class MigrationCategory extends AeroMigrationRunner
     /** @var int Déplacements abandonnés : une homonyme occupe déjà la place visée */
     protected $blockedMoves = 0;
 
+    /** @var array<int,bool> Rubriques qui seront fusionnées avec une homonyme du catalogue */
+    protected $twinsToMerge = array();
+
     /**
      * Charge le catalogue source et les correspondances avec la boutique.
      *
@@ -122,6 +125,10 @@ class MigrationCategory extends AeroMigrationRunner
             $this->catalogueByNo[(int) $obj->CL_No] = $obj;
         }
         $this->db->free($resql);
+
+        if ($this->loadTwins() < 0) {
+            return -1;
+        }
 
         // Catégories déjà reprises, pour retrouver un parent créé lors d'un passage
         // antérieur sans le recréer.
@@ -256,6 +263,49 @@ class MigrationCategory extends AeroMigrationRunner
     }
 
     /**
+     * Repère les rubriques qui seront fusionnées avec une homonyme du catalogue.
+     *
+     * Dolibarr impose l'unicité du couple (libellé, parent) : deux rubriques identiques
+     * sous le même parent deviennent une seule catégorie, et la seconde ne reçoit donc
+     * jamais de `ref_ext` propre. Sans cette carte, le mode simulation les annoncerait
+     * indéfiniment comme des créations à venir, alors qu'un passage réel n'en crée aucune.
+     *
+     * La première rubrique du groupe est celle au plus petit `CL_No`, le parcours suivant
+     * cet ordre.
+     *
+     * Le regroupement se fait dans la collation de la CIBLE, non dans celle de la source.
+     * L'écart n'est pas théorique : `utf8mb4_0900_ai_ci` tient « CD-ROM (formation,
+     * logiciels… ) » et « CD-Rom (formation, logiciels...) » pour un seul et même libellé —
+     * elle ignore la casse, et décompose le caractère « … » en trois points. La collation
+     * de la source, elle, les distingue. C'est bien la cible qui décide de la fusion.
+     *
+     * @return int 1 si OK, -1 en cas d'erreur SQL
+     */
+    protected function loadTwins()
+    {
+        $collated = 'CONVERT(%s.CL_Intitule USING utf8mb4) COLLATE utf8mb4_0900_ai_ci';
+
+        $sql  = 'SELECT c.CL_No FROM '.$this->srcTable.' as c';
+        $sql .= ' INNER JOIN (SELECT CL_NoParent, '.sprintf($collated, $this->srcTable).' as lib, MIN(CL_No) as premier';
+        $sql .= '   FROM '.$this->srcTable.' GROUP BY CL_NoParent, lib HAVING COUNT(*) > 1) as d';
+        $sql .= '   ON d.CL_NoParent = c.CL_NoParent AND d.lib = '.sprintf($collated, 'c');
+        $sql .= ' WHERE c.CL_No <> d.premier';
+
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
+            return -1;
+        }
+
+        while ($obj = $this->db->fetch_object($resql)) {
+            $this->twinsToMerge[(int) $obj->CL_No] = true;
+        }
+        $this->db->free($resql);
+
+        return 1;
+    }
+
+    /**
      * Annonce l'action prévue en simulation.
      *
      * @param stdClass $row        Ligne source
@@ -266,6 +316,12 @@ class MigrationCategory extends AeroMigrationRunner
     {
         if ($existingId > 0) {
             return 'updated';
+        }
+
+        // Une rubrique en double ne donnera pas lieu à une création : elle rejoindra son
+        // homonyme. L'annoncer autrement ferait mentir la simulation à chaque passage.
+        if (isset($this->twinsToMerge[(int) $row->CL_No])) {
+            return 'skipped';
         }
 
         $prestaId = $this->getPrestaCategoryId($row);

@@ -684,18 +684,29 @@ class MigrationProduct extends AeroMigrationRunner
         }
 
         // ── Coût de revient ────────────────────────────────────────────────
-        // Dolibarr n'a qu'un `cost_price`, là où la source distingue trois notions :
-        // le prix d'achat brut (AR_PrixAch), le prix de revient unitaire (AR_PrixRU) et
-        // le coût standard (AR_CoutStd). C'est le prix de revient qui est retenu : il
-        // intègre les frais et donne une marge juste. Le prix d'achat relève du couple
-        // produit/fournisseur, il sera repris avec les tarifs fournisseurs.
+        // Dolibarr n'a qu'un `cost_price`, là où la source distingue trois notions : le
+        // prix d'achat brut (AR_PrixAch), le prix de revient unitaire (AR_PrixRU) et le
+        // coût standard (AR_CoutStd). Le prix d'achat relève du couple produit/fournisseur
+        // et est repris par le script `supplierprice` ; restent les deux autres.
         //
-        // 1 628 prix de revient sont aberrants — inférieurs au centime, jusqu'à
-        // 0,000001 € pour un article dont le coût standard est à 4,19 €. Le coût standard
-        // prend alors le relais, ce qui récupère 1 458 de ces cas.
-        $cost = (float) $row->AR_PrixRU;
+        // C'est le COÛT STANDARD qui est retenu, et non le prix de revient malgré son nom
+        // plus prometteur : celui-ci n'est jamais recalculé quand le tarif fournisseur
+        // change. Sur les 13 814 articles ayant un fournisseur principal tarifé, 2 767
+        // portent un prix de revient INFÉRIEUR à leur propre prix d'achat — l'article
+        // 10514 est à 35,26 € pour un achat à 75,92 €. Le coût standard, lui, suit : il
+        // égale exactement le prix d'achat sur 11 836 articles.
+        //
+        // La preuve tient dans la marge : rapporté au prix de vente, le prix d'achat donne
+        // un coefficient moyen de 1,84, quand le prix de revient en donne un de plusieurs
+        // millions. Un coût sous-évalué gonfle la marge affichée par Dolibarr, qui s'appuie
+        // sur ce champ.
+        //
+        // Le coût standard est aussi le plus propre des deux : 14 906 valeurs exploitables
+        // contre 13 152, et aucune valeur aberrante contre 1 628 sous le centime. Le prix
+        // de revient ne sert donc que de repli, pour les 14 articles sans coût standard.
+        $cost = (float) $row->AR_CoutStd;
         if ($cost < 0.01) {
-            $cost = (float) $row->AR_CoutStd;
+            $cost = (float) $row->AR_PrixRU;
         }
 
         if ($cost >= 0.01 && (!$fillOnly || empty($product->cost_price))) {
