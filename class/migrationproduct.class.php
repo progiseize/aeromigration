@@ -172,6 +172,23 @@ class MigrationProduct extends AeroMigrationRunner
     /** @var array<int,bool> Catégories du catalogue introuvables, signalées une fois */
     protected $missingCatalogue = array();
 
+    /**
+     * Codes-barres déjà attribués : valeur -> ref_ext du produit qui la porte.
+     *
+     * Le porteur est mémorisé, et non un simple drapeau : un produit déjà repris porte
+     * légitimement son propre code-barres, ce n'est pas un conflit. Sans cette distinction,
+     * un second passage écarterait les 8 700 codes-barres qu'il vient lui-même de poser.
+     *
+     * @var array<string,string>
+     */
+    protected $barcodesInUse = array();
+
+    /** @var int Codes-barres écartés parce que déjà portés par un autre produit */
+    protected $barcodeDuplicated = 0;
+
+    /** @var array<string,int> Valeurs de code-barres écartées car non significatives */
+    protected $barcodeInvalid = array();
+
     /** @var array<string,int> Libellés de disponibilité non reconnus */
     protected $unresolvedAvailability = array();
 
@@ -209,6 +226,10 @@ class MigrationProduct extends AeroMigrationRunner
         }
 
         if ($this->loadProductRefs() < 0) {
+            return -1;
+        }
+
+        if ($this->loadBarcodes() < 0) {
             return -1;
         }
 
@@ -286,6 +307,69 @@ class MigrationProduct extends AeroMigrationRunner
         $this->db->free($resql);
 
         return 1;
+    }
+
+    /**
+     * Charge les codes-barres déjà attribués.
+     *
+     * Dolibarr impose l'unicité du code-barres sur toute l'entité
+     * (`uk_product_barcode`), et refuse la fiche entière lorsqu'elle en porte un déjà pris
+     * — pas seulement le champ. Un doublon fait donc échouer la création ou l'adoption du
+     * produit, avec le reste de ses données.
+     *
+     * La source en compte 8 706 pour 8 637 valeurs distinctes : 69 doublons, dont un
+     * « à compléter » partagé par cinq articles.
+     *
+     * @return int 1 si OK, -1 en cas d'erreur SQL
+     */
+    protected function loadBarcodes()
+    {
+        $sql  = 'SELECT barcode, ref_ext FROM '.MAIN_DB_PREFIX.'product';
+        $sql .= ' WHERE entity IN ('.getEntity('product').")";
+        $sql .= " AND barcode IS NOT NULL AND TRIM(barcode) <> ''";
+
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
+            return -1;
+        }
+
+        while ($obj = $this->db->fetch_object($resql)) {
+            $this->barcodesInUse[trim((string) $obj->barcode)] = (string) $obj->ref_ext;
+        }
+        $this->db->free($resql);
+
+        return 1;
+    }
+
+    /**
+     * Code-barres exploitable d'un article, ou chaîne vide.
+     *
+     * La colonne sert aussi de pense-bête dans la source : « à compléter », « code barre »,
+     * ou des références fournisseur comme « PNR ASA-AVIDYNE ». Un code-barres ne comporte
+     * ni espace ni lettre seule : ces deux règles suffisent à écarter le bruit sans risquer
+     * d'exclure une valeur légitime, les 8 572 codes réels faisant 12 ou 13 caractères.
+     *
+     * @param string $value Valeur brute
+     * @return string       Code-barres exploitable, chaîne vide sinon
+     */
+    protected function cleanBarcode($value)
+    {
+        $value = trim((string) $value);
+
+        if ($value === '') {
+            return '';
+        }
+
+        if (strpos($value, ' ') !== false || !preg_match('/[0-9]/', $value)) {
+            if (!isset($this->barcodeInvalid[$value])) {
+                $this->barcodeInvalid[$value] = 0;
+            }
+            $this->barcodeInvalid[$value]++;
+            return '';
+        }
+
+        return $value;
     }
 
     /**
@@ -725,9 +809,22 @@ class MigrationProduct extends AeroMigrationRunner
             $product->weight_units = 0; // kilogramme
         }
 
-        $barcode = trim((string) $row->AR_CodeBarre);
+        // Le code-barres n'est posé que s'il est encore libre : Dolibarr en impose
+        // l'unicité et refuse la fiche entière lorsqu'il est déjà pris, faisant perdre
+        // toutes les autres données de l'article pour un champ accessoire.
+        $barcode = $this->cleanBarcode($row->AR_CodeBarre);
         if ($barcode !== '' && (!$fillOnly || empty($product->barcode))) {
-            $product->barcode = $barcode;
+            $expected = $this->buildRefExt($ref);
+            $owner    = isset($this->barcodesInUse[$barcode]) ? $this->barcodesInUse[$barcode] : '';
+
+            // Le porteur actuel est-il ce même article ? Alors il n'y a pas de conflit :
+            // c'est un second passage sur un produit déjà repris.
+            if ($owner !== '' && $owner !== $expected) {
+                $this->barcodeDuplicated++;
+            } else {
+                $product->barcode = $barcode;
+                $this->barcodesInUse[$barcode] = $expected;
+            }
         }
 
         // ── Statut ─────────────────────────────────────────────────────────
@@ -1012,6 +1109,27 @@ class MigrationProduct extends AeroMigrationRunner
             }
             if ($this->prestaIdConflicts > 0) {
                 $lines[] = '  '.str_pad((string) $this->prestaIdConflicts, 6, ' ', STR_PAD_LEFT).'  produit(s) non liés : identifiant boutique déjà attribué';
+            }
+        }
+
+        if ($this->barcodeDuplicated > 0 || !empty($this->barcodeInvalid)) {
+            if ($lines) {
+                $lines[] = '';
+            }
+            $lines[] = 'Codes-barres :';
+            if ($this->barcodeDuplicated > 0) {
+                $lines[] = '  '.str_pad((string) $this->barcodeDuplicated, 6, ' ', STR_PAD_LEFT)
+                    .'  déjà porté(s) par un autre produit, laissé(s) de côté';
+                $lines[] = '          Dolibarr en impose l\'unicité et refuserait la fiche entière.';
+                $lines[] = '          Le produit est repris, seul son code-barres manque.';
+            }
+            if (!empty($this->barcodeInvalid)) {
+                arsort($this->barcodeInvalid);
+                $lines[] = '  '.str_pad((string) count($this->barcodeInvalid), 6, ' ', STR_PAD_LEFT)
+                    .'  valeur(s) qui ne sont pas des codes-barres, écartée(s) :';
+                foreach (array_slice($this->barcodeInvalid, 0, 6, true) as $value => $nb) {
+                    $lines[] = '            '.str_pad('« '.$value.' »', 28).$nb.' article(s)';
+                }
             }
         }
 

@@ -6,6 +6,35 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.7.3] — 2026-07-29
+
+### Corrigé
+
+- **Un code-barres en double faisait échouer tout le produit.** La source en compte 69,
+  plus quelques valeurs de remplissage — « à compléter » sur cinq articles, « code barre »,
+  ou des références fournisseur. Dolibarr en impose l'unicité et **refuse la fiche entière**
+  lorsqu'elle en porte un déjà pris : l'article était perdu avec toutes ses données, pour un
+  champ accessoire.
+
+  Le code-barres n'est désormais posé que s'il est libre, et les valeurs comportant un espace
+  ou dépourvues de chiffre sont écartées d'emblée. Le produit est repris dans tous les cas.
+  Le rapport dénombre les deux situations et cite les valeurs écartées.
+
+  Le porteur légitime est distingué d'un conflit réel : un produit déjà repris porte son
+  propre code-barres, ce n'est pas un doublon. Sans cette nuance, un second passage aurait
+  écarté les 8 700 codes-barres qu'il venait lui-même de poser.
+
+> **Pourquoi ce défaut est passé au travers de la recette.** `Product::verify()` ne contrôle
+> l'unicité du code-barres que si le module **Codes-barres** est activé
+> (product.class.php:1361) — il ne l'était pas sur l'instance de développement. Et l'index
+> `uk_product_barcode` portant sur `(barcode, fk_barcode_type, entity)`, il ne bloquait rien
+> non plus, `fk_barcode_type` étant NULL sur les 15 811 produits.
+>
+> Deux garde-fous neutralisés en même temps, sur un environnement plus permissif que la
+> cible. Les prochaines reprises devront comparer les modules activés de part et d'autre
+> avant de conclure qu'un script est propre.
+
+
 ## [0.7.2] — 2026-07-29
 
 ### La page de configuration affiche l'état réel

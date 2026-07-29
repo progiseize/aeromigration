@@ -317,6 +317,31 @@ reprise.
 > `migrate.php product` n'a pas été passé en entier — c'est un ordonnancement, pas une
 > anomalie, et les rapports le disent explicitement.
 
+### A11. Codes-barres en double et valeurs de remplissage
+
+`AR_CodeBarre` est renseigné sur **8 706 articles pour 8 637 valeurs distinctes** : 69
+doublons. La colonne sert aussi de pense-bête — « à compléter » (5 articles), « code barre »,
+ou des références fournisseur comme « PNR ASA-AVIDYNE ».
+
+**Dolibarr impose l'unicité du code-barres, et refuse la fiche entière** lorsqu'elle en porte
+un déjà pris — pas seulement le champ. Un doublon fait donc échouer la création ou l'adoption
+du produit, avec toutes ses autres données, pour un champ accessoire.
+
+**Décision** : le code-barres n'est posé que s'il est libre. Les valeurs comportant un espace
+ou dépourvues de chiffre sont écartées d'emblée — deux règles qui suffisent à isoler le bruit
+sans risque, les 8 572 codes réels faisant tous 12 ou 13 caractères. Le produit est repris
+dans tous les cas, seul son code-barres manque, et le rapport dénombre les deux situations.
+
+> **Ce défaut est resté invisible en développement.** `Product::verify()` ne contrôle
+> l'unicité que si le module **Codes-barres** est activé (product.class.php:1361) — il ne
+> l'était pas sur l'instance de développement. Et l'index `uk_product_barcode` portant sur
+> `(barcode, fk_barcode_type, entity)`, il ne bloquait rien non plus : `fk_barcode_type`
+> étant NULL sur les 15 811 produits, MySQL n'applique pas la contrainte.
+>
+> Deux garde-fous neutralisés en même temps, sur un environnement plus permissif que la
+> cible. À retenir pour les prochaines reprises : **vérifier les modules activés des deux
+> côtés avant de conclure qu'un script est propre.**
+
 ### A9. Des déclinaisons créées en articles indépendants
 
 Sage sait gérer les gammes : `AR_Gamme1` désigne l'article porteur, `f_artgamme` en énumère
