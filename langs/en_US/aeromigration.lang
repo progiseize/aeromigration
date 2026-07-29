@@ -26,3 +26,5 @@ AeroMigScriptCategory=Product categories
 AeroMigScriptSupplierPrice=Supplier prices
 AeroMigScriptWarehouse=Warehouses and locations
 AeroMigScriptStock=Stock
+AeroMigStatusDone=OK
+AeroMigStatusUnknown=Unknown

@@ -422,6 +422,30 @@ class MigrationStock extends AeroMigrationRunner
     }
 
     /**
+     * Nombre de mouvements d'ouverture déjà posés.
+     *
+     * Comptés sur le code d'inventaire : `llx_stock_mouvement` n'a ni ref_ext, ni
+     * import_key, ni entity.
+     *
+     * @return int Nombre de mouvements, -1 si le comptage échoue
+     */
+    public function countMigrated()
+    {
+        $sql  = 'SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.$this->dstTable;
+        $sql .= " WHERE inventorycode = '".$this->db->escape($this->buildRefExt($this->inventoryKey))."'";
+
+        $resql = $this->db->query($sql, 1);
+        if (!$resql) {
+            return -1;
+        }
+
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+
+        return (int) $obj->nb;
+    }
+
+    /**
      * Clé de comparaison d'un libellé d'entrepôt.
      *
      * Reproduit celle de MigrationWarehouse, elle-même calquée sur la collation de

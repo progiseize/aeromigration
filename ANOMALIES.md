@@ -729,6 +729,96 @@ aberrantes : 519 à `0000-00-00`, 109 en année **9202**, 2 en 2027.
 
 ---
 
+## Documents commerciaux (`f_doc*`) — analyse préalable, non repris
+
+Relevé du 29/07/2026, avant toute décision de reprise. Quatre tables :
+`f_docentete_global` (318 030), `f_docligne_global` (1 039 279),
+`f_docexpedition_global` (61 156) et `f_docligne` (243).
+
+### D1. Ce que contiennent les documents
+
+Les documents sont typés par le couple `DO_Domaine` / `DO_Type` :
+
+| Domaine | Type | Document | Volume | Période |
+|---|---|---|---:|---|
+| 0 | 0 | Devis | 1 433 | 2019-2026 |
+| 0 | 1 | Commande client | 60 936 | 2019-2026 |
+| 0 | 2 | Préparation de livraison | 61 377 | 2019-2026 |
+| 0 | 3 | Bon de livraison | **314** | 2019-2026 |
+| 0 | 6 | Facture | 31 168 | 2019-2026 |
+| 0 | 7 | Facture comptabilisée | 149 943 | **2015-2024** |
+| 1 | 12 | Commande fournisseur | 2 567 | 2019-2026 |
+| 1 | 13 | Bon de réception | 3 116 | 2019-2026 |
+| 1 | 16 | Facture fournisseur | 2 113 | 2019-2026 |
+| 2 | 20 / 21 | Entrée / sortie de stock | 5 054 | → 2026 |
+
+Les lignes portent article, désignation, quantité, prix unitaire HT, taux de TVA et
+jusqu'à trois remises. Sur 2025-2026 seulement : **25 137 factures, 2 431 196 € HT**.
+
+### D2. Les rattachements sont excellents
+
+| | |
+|---|---|
+| Documents de vente dont le tiers existe en cible | **304 783 / 305 171 (99,9 %)** |
+| Documents d'achat dont le fournisseur existe | **7 805 / 7 805 (100 %)** |
+| Lignes de facture rattachées à un produit | **500 357 / 519 890 (96 %)** |
+
+Les 19 295 lignes sans référence sont des lignes de texte libre, que Dolibarr sait
+représenter.
+
+Taux de TVA rencontrés : 20 % (343 748 lignes), 5,5 % (135 663), 0 % (35 596), plus
+quelques 5 % et 6 % résiduels.
+
+### D3. Une coupure d'archivage fin 2019
+
+Avant octobre 2019, il ne subsiste **que des factures comptabilisées** : devis, commandes,
+préparations et réceptions ont été purgés. Les factures comptabilisées s'arrêtent elles-mêmes
+en septembre 2024, quand les factures « vivantes » prennent le relais — **aucun recouvrement
+entre les deux**, c'est une bascule propre, pas un doublon.
+
+### D4. Aucun règlement n'est enregistré
+
+`reglement_1`, `reglement_2` et `reglement_3` sont **vides sur les 181 111 factures**.
+
+**C'est le point le plus bloquant** : rien ne dit ce qui est payé. Reprises telles quelles,
+toutes les factures arriveraient **impayées** dans Dolibarr, ce qui fausserait entièrement
+les comptes clients et les relances.
+
+### D5. Le flux s'arrête à la préparation
+
+**314 bons de livraison pour 61 377 préparations.** La sortie de stock se fait à la
+facturation, pas à la livraison (confirmé par la reconstitution du stock, voir S9).
+Reprendre des expéditions Dolibarr n'aurait donc guère de sens.
+
+Le chaînage vers la commande d'origine existe sur **200 717 lignes de facture sur 519 890**
+(39 %), via `DL_PieceBC`.
+
+### D6. `f_docexpedition_global` est presque vide
+
+61 156 lignes, mais **aucune URL de suivi**, aucun e-mail, aucun commentaire, aucun message
+cadeau. Seuls **14 247 identifiants de point relais** et 2 627 marqueurs d'expédition sont
+renseignés. Les colonnes de statut de préparation sont à zéro sur la totalité.
+
+### D7. `f_docligne` est un résidu
+
+243 lignes, dont **150 dupliquent `f_docligne_global`**. Table de travail, sans valeur.
+
+### Ce qui vaudrait la peine, le jour venu
+
+**À reprendre** : les factures depuis 2019 (31 168) avec leurs lignes, pour l'historique
+commercial consultable. Éventuellement les commandes clients de la même période.
+
+**À écarter** : les 149 943 factures comptabilisées antérieures à 2024 (volume énorme,
+valeur documentaire seulement), les préparations, les bons de livraison, et
+`f_docexpedition_global`.
+
+**À trancher avec le client avant de commencer** : à quoi doit servir cet historique ?
+Consulter le passé d'un client, ou disposer d'une comptabilité complète ? Dans le second
+cas, l'absence de règlements est rédhibitoire — il faudra les récupérer ailleurs, n'importer
+que des factures soldées, ou renoncer.
+
+---
+
 ## Pièges Dolibarr rencontrés
 
 ### P1. `purge.php product --confirm` détruit des produits de la boutique

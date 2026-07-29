@@ -66,6 +66,38 @@ class MigrationNewsletter extends AeroMigrationRunner
      *
      * @return string
      */
+    /**
+     * Nombre de désinscriptions déjà posées par la reprise.
+     *
+     * Ce script ne crée aucun objet : il inscrit des adresses dans la liste d'exclusion
+     * des envois en masse. Le comptage porte donc sur les tiers désinscrits dans la source
+     * dont l'adresse figure effectivement dans cette liste — même critère que la purge.
+     *
+     * @return int Nombre de désinscriptions, -1 si le comptage échoue
+     */
+    public function countMigrated()
+    {
+        // Le parcours part de la liste d'exclusion, qui compte quelques milliers de lignes,
+        // et non des 157 000 tiers : la jointure sur f_comptet passerait par un
+        // CONCAT() entre deux collations différentes, que MySQL ne sait pas indexer.
+        // Mesuré : 665 ms contre 1 942, pour un résultat identique.
+        $sql  = 'SELECT COUNT(DISTINCT u.email) as nb FROM '.MAIN_DB_PREFIX.'mailing_unsubscribe as u';
+        $sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'societe as s ON s.email = u.email';
+        $sql .= '   AND s.entity IN ('.getEntity('societe').')';
+        $sql .= ' WHERE u.entity IN ('.getEntity('mailing', 0).')';
+        $sql .= " AND s.ref_ext LIKE '".$this->db->escape($this->refExtPrefix)."%'";
+
+        $resql = $this->db->query($sql, 1);
+        if (!$resql) {
+            return -1;
+        }
+
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+
+        return (int) $obj->nb;
+    }
+
     public function getPurgeDescription()
     {
         return 'Réinscription des tiers désinscrits par la reprise (table '

@@ -401,6 +401,30 @@ class MigrationWarehouse extends AeroMigrationRunner
     }
 
     /**
+     * Nombre d'entrepôts déjà repris.
+     *
+     * Comptés sur import_key, `llx_entrepot` n'ayant pas de ref_ext.
+     *
+     * @return int Nombre d'entrepôts, -1 si le comptage échoue
+     */
+    public function countMigrated()
+    {
+        $sql  = 'SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.$this->dstTable;
+        $sql .= ' WHERE entity IN ('.getEntity($this->dstElement).')';
+        $sql .= " AND import_key LIKE '".$this->db->escape($this->refExtPrefix)."%'";
+
+        $resql = $this->db->query($sql, 1);
+        if (!$resql) {
+            return -1;
+        }
+
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+
+        return (int) $obj->nb;
+    }
+
+    /**
      * Clé de comparaison d'un libellé d'entrepôt.
      *
      * Reproduit la sémantique de l'index unique de la table, insensible à la casse et aux

@@ -564,6 +564,30 @@ class MigrationSupplierPrice extends AeroMigrationRunner
     }
 
     /**
+     * Nombre de lignes tarifaires déjà reprises.
+     *
+     * Comptées sur import_key, la table n'ayant pas de ref_ext.
+     *
+     * @return int Nombre de lignes, -1 si le comptage échoue
+     */
+    public function countMigrated()
+    {
+        $sql  = 'SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.$this->dstTable;
+        $sql .= ' WHERE entity IN ('.getEntity($this->dstElement).')';
+        $sql .= " AND import_key LIKE '".$this->db->escape($this->refExtPrefix)."%'";
+
+        $resql = $this->db->query($sql, 1);
+        if (!$resql) {
+            return -1;
+        }
+
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+
+        return (int) $obj->nb;
+    }
+
+    /**
      * Nettoie une référence fournisseur.
      *
      * Cette méthode est la seule autorité sur la forme d'une référence : elle sert aussi

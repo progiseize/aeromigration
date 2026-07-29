@@ -6,6 +6,38 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.7.2] — 2026-07-29
+
+### La page de configuration affiche l'état réel
+
+La colonne « État » annonçait « À lancer » pour tous les scripts, en dur, depuis la version
+squelette du module. Elle indique désormais lesquels ont été passés :
+
+```
+Tiers (clients et fournisseurs)   thirdparty   OK
+Entrepôts et emplacements         warehouse    OK
+Stocks                            stock        À lancer
+```
+
+Elle répond à une seule question — où en est-on dans l'ordre des reprises — et l'état est
+**mesuré sur la base**, non sur une trace d'exécution : un script est « lancé » si ce qu'il
+produit est là. C'est la seule mesure qui reste juste d'un environnement à l'autre, et qui
+repasse d'elle-même à « À lancer » après une purge.
+
+Nouvelle méthode `countMigrated()` sur le socle, distincte de `loadMigratedIndex()` qui
+charge l'index complet — sur les huit scripts réunis, cela aurait représenté plus de
+350 000 entrées en mémoire pour afficher huit nombres.
+
+Quatre scripts la surchargent, ne se repérant pas par `ref_ext` : `warehouse` et
+`supplierprice` comptent sur `import_key`, `stock` sur le code d'inventaire, et `newsletter`
+sur la liste d'exclusion des envois.
+
+Le comptage de `newsletter` partait d'abord des 157 102 tiers et joignait `f_comptet` par un
+`CONCAT()` entre deux collations différentes, que MySQL ne sait pas indexer : **1 942 ms à
+lui seul**. Il part désormais de la liste d'exclusion, quelques milliers de lignes, pour un
+résultat identique en 665 ms. Les huit comptages tiennent en **0,87 s** au lieu de 2,17.
+
+
 ## [0.7.1] — 2026-07-29
 
 ### Corrigé

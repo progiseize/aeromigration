@@ -462,6 +462,35 @@ abstract class AeroMigrationRunner
     }
 
     /**
+     * Nombre d'objets que ce script a déjà repris.
+     *
+     * Sert à afficher l'état d'avancement sans rien lancer. Volontairement distincte de
+     * loadMigratedIndex(), qui charge l'index complet en mémoire : sur les huit scripts
+     * réunis, cela représenterait plus de 350 000 entrées pour afficher huit nombres.
+     *
+     * Les scripts qui ne se repèrent pas par ref_ext — la table cible n'en ayant pas
+     * toujours — surchargent cette méthode.
+     *
+     * @return int Nombre d'objets repris, -1 si le comptage échoue
+     */
+    public function countMigrated()
+    {
+        $sql  = 'SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.$this->dstTable;
+        $sql .= ' WHERE entity IN ('.getEntity($this->dstElement).')';
+        $sql .= " AND ref_ext LIKE '".$this->db->escape($this->refExtPrefix)."%'";
+
+        $resql = $this->db->query($sql, 1);
+        if (!$resql) {
+            return -1;
+        }
+
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+
+        return (int) $obj->nb;
+    }
+
+    /**
      * Charge en mémoire l'index des objets déjà migrés (ref_ext -> rowid).
      *
      * Une seule requête au lieu d'un fetch() par ligne : sur plus de 150 000 tiers,
