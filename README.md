@@ -29,7 +29,14 @@ php migrate.php newsletter     désinscriptions → enrichit les tiers
 php migrate.php category       catalogue
 php migrate.php product        articles        → rattachés aux catégories
 php migrate.php supplierprice  tarifs fournisseurs → relient articles et tiers
+php migrate.php warehouse      entrepôts et emplacements
 ```
+
+`warehouse` lit `f_emplacements`, **seule table du jeu source qui ne vienne pas de Sage** :
+les libellés d'emplacement n'existaient nulle part dans les données livrées et ont dû être
+extraits du code HTML de l'ancien ERP. Son script de création est dans
+[data/f_emplacements.sql](data/f_emplacements.sql), à rejouer avant la reprise sur toute
+nouvelle instance.
 
 | Script | Dépend de | Ce qui se passe s'il est lancé trop tôt |
 |---|---|---|
@@ -39,6 +46,7 @@ php migrate.php supplierprice  tarifs fournisseurs → relient articles et tiers
 | `category` | — | |
 | `product` | `category` | les articles sont créés **sans classement**, et le rapport le signale |
 | `supplierprice` | `thirdparty`, `product` | les lignes sans article ni tiers repris sont ignorées, et le rapport les dénombre |
+| `warehouse` | — | s'arrête si `f_emplacements` ou le dépôt principal sont absents |
 
 Les deux derniers restent tolérants. Un article sans catégorie demeure un article valide, et
 l'on peut vouloir reprendre les produits seuls ; le rapport indique alors clairement

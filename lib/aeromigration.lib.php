@@ -97,5 +97,13 @@ function aeromigrationGetScripts()
             'class' => 'MigrationSupplierPrice',
             'file'  => '/aeromigration/class/migrationsupplierprice.class.php',
         ),
+        // Indépendant des autres reprises, mais à passer avant les stocks : ceux-ci s'y
+        // rattachent. Lit f_emplacements, seule table du jeu qui ne vienne pas de Sage.
+        array(
+            'code'  => 'warehouse',
+            'label' => 'AeroMigScriptWarehouse',
+            'class' => 'MigrationWarehouse',
+            'file'  => '/aeromigration/class/migrationwarehouse.class.php',
+        ),
     );
 }

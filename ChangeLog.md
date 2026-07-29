@@ -6,6 +6,80 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.6.0] — 2026-07-29
+
+### Reprise des entrepôts et des emplacements
+
+- **Nouveau script `warehouse`** : un entrepôt principal repris de `f_depot` avec son
+  adresse, puis **717 sous-entrepôts** correspondant aux emplacements réellement occupés,
+  rattachés à plat en dessous.
+- L'ancien ERP ne connaît qu'un seul dépôt réel. Le second, « Siege boutique.aero », est
+  une coquille de 11 826 lignes toutes à zéro ; un troisième, non déclaré, apparaît sous le
+  numéro 0 avec cinq lignes négatives. Tous deux sont écartés.
+- **Seuls les emplacements occupés sont créés** — 810 sur 1 006. Créer les 196 autres
+  reviendrait à peupler les sélecteurs d'entrepôt d'entrées vides ; ils seront créés au
+  passage suivant s'ils reviennent à l'usage.
+
+### Les libellés d'emplacement, retrouvés hors des données
+
+Les emplacements n'existaient dans la source que sous forme de numéros : la table de
+correspondance de Sage n'a pas été répliquée, et l'export de l'ancien ERP ne montre pas
+les identifiants.
+
+Ils ont été extraits du **code HTML de l'interface**, où l'attribut `data-dp-no` des cases
+à cocher les porte, puis rangés dans `f_emplacements` — seule table de ce jeu qui ne vienne
+pas de Sage. Le script de création est livré dans `data/f_emplacements.sql` pour être
+rejoué en production. Couverture : **810 des 819 numéros utilisés, soit 98,9 %**.
+
+> Un alignement par position avait été envisagé sur l'export CSV, faute d'identifiant. Il
+> était **faux** : sa première ligne correspond au numéro 1014, pas 1. L'appliquer aurait
+> placé des milliers d'articles au mauvais endroit sans que rien ne le signale.
+
+### Une contrainte de Dolibarr à connaître
+
+`uk_entrepot_label` porte sur **(libellé, entité)** et non sur (libellé, parent) : un nom
+d'entrepôt est unique dans toute la base. Deux conséquences :
+
+- **93 emplacements sont fusionnés** avec un homonyme — huit s'appellent « BOUTIQUE ».
+  L'entrepôt existant est réutilisé, le premier numéro rencontré l'emportant.
+- Le jour où la hiérarchie sera affinée, il restera impossible d'avoir un « RANG-A » sous
+  deux étagères différentes. Sans conséquence ici : les libellés portent déjà leur chemin
+  complet — « S1-A15-4 » se lit salle 1, allée A15, niveau 4 —, la hiérarchie fine pourra
+  donc être construite **sans jamais les renommer**.
+
+Trois emplacements occupés n'ont aucun libellé dans la source ; Dolibarr refusant un
+entrepôt sans nom, leur numéro d'origine en tient lieu. Ils existent toujours dans l'ancien
+ERP : les y nommer suffirait à retrouver leur libellé au passage suivant.
+
+### Un entrepôt « À localiser » pour les emplacements disparus
+
+Huit numéros encore portés par 114 articles n'existent plus dans l'ancien ERP — 605 à 611
+et 639. Ce ne sont pas des trous d'extraction : leurs voisins immédiats sont bien présents.
+Quelqu'un les a supprimés sans réaffecter leur contenu.
+
+Ces articles auraient rejoint l'entrepôt principal, mêlés aux quelque 2 000 lignes qui n'ont
+simplement jamais été rangées. Ils sont désormais regroupés dans un entrepôt dédié, dont la
+description porte la liste des numéros concernés.
+
+Le nom est une consigne plutôt qu'un constat — leur localisation physique est à retrouver —
+et son accent initial le fait remonter en tête des sélecteurs d'entrepôt, où il restera
+visible tant que le rangement n'aura pas été fait.
+
+Sur les 114 articles, 99 ont un stock à zéro : **15 seulement demandent une intervention**,
+pour 161 unités.
+
+### Le piège de la création d'entrepôt
+
+`Entrepot::create()` insère une ligne minimale puis appelle `update()`, qui écrit sans
+condition `statut`, `warehouse_usage` et `fk_user_author` depuis les propriétés de l'objet.
+Les laisser vides donne un entrepôt **fermé**, d'usage `0` — valeur qui n'est ni interne ni
+externe. C'est exactement l'état des trois entrepôts de démonstration déjà en base. Le
+script les positionne avant l'appel.
+
+Bonne surprise en revanche : `update()` écrit `import_key`, le marqueur de reprise est donc
+posé dès la création, sans la seconde passe qu'imposent les tarifs fournisseurs.
+
+
 ## [0.5.0] — 2026-07-28
 
 ### Reprise des tarifs fournisseurs

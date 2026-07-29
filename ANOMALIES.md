@@ -106,9 +106,9 @@ recréé alors que le produit existe. Sans ce rapprochement de secours, un passa
 source complète avec une table de liaison incomplète crée près de 15 000 doublons — ce qui
 est arrivé une fois en développement.
 
-Le fichier `data/prod.csv` a servi à délimiter un premier périmètre de 828 références. Il
-n'est **plus utilisé par le script** depuis que le rapprochement couvre tous les cas ; il
-est conservé à titre documentaire.
+Un fichier `prod.csv` a servi un temps à délimiter un premier périmètre de 828 références.
+Il n'est **plus utilisé par le script** depuis que le rapprochement couvre tous les cas, et
+a été retiré du module.
 
 **L'adoption ne remplace rien** : référence, libellé, prix, statut et type du produit
 restent ceux de la boutique. La reprise n'apporte que ce qui manque — poids, code-barres,
@@ -488,6 +488,124 @@ vaut `1` que sur 710 lignes, `AF_Conversion` et `AF_ConvDiv` sont entièrement n
 
 ---
 
+## Emplacements de stock (`f_emplacements`)
+
+| # | Anomalie | Volume | Décision |
+|---|---|---:|---|
+| E1 | Libellés absents de la source | 819 numéros | Extraits du HTML de l'ancien ERP |
+| E2 | Un même libellé pour plusieurs emplacements | 70 libellés | Fusionnés |
+| E3 | Emplacements sans libellé | 3 occupés | Nommés d'après leur numéro |
+| E4 | Libellés fantaisistes | 6 | Repris tels quels |
+| E5 | Emplacements supprimés dans l'ancien ERP | 8 (114 articles) | Entrepôt de repli « À localiser » |
+
+### E1. Les libellés n'étaient nulle part dans les données
+
+`f_artstock.DP_NoPrincipal` ne porte qu'un numéro. La table de correspondance de Sage
+(`F_DEPOTEMPL`) **n'a pas été répliquée** dans la base livrée — vérifié par balayage de
+l'intégralité du schéma. Aucune autre colonne ne contient d'emplacement : les 20
+`champ_libre` de `f_article` sont vides, comme `f_catalogue.CL_Emplacement`, pourtant
+prometteur par son nom.
+
+L'export CSV de l'ancien ERP donne les libellés mais **pas les identifiants**. Ceux-ci ont
+finalement été trouvés dans le **code HTML de l'interface**, portés par l'attribut
+`data-dp-no` des cases à cocher. D'où la table `f_emplacements` (1 006 lignes), seule table
+de ce jeu qui ne vienne pas de Sage, livrée avec son script dans `data/f_emplacements.sql`.
+
+Couverture : **810 des 819 numéros utilisés (98,9 %)**.
+
+> **Piège évité.** Faute d'identifiant dans le CSV, un alignement par position avait été
+> envisagé — le fichier n'étant pas trié alphabétiquement, il suivait vraisemblablement
+> l'ordre de création. Les trois emplacements les plus chargés tombaient d'ailleurs sur
+> « BOUTIQUE » avec un décalage de 1, ce qui était troublant. C'était **faux** : la
+> première ligne du CSV correspond au numéro 1014. Des milliers d'articles auraient été
+> placés au mauvais endroit sans que rien ne le signale.
+
+### E2. Un même libellé pour plusieurs emplacements
+
+70 libellés sont partagés par plusieurs numéros : huit s'appellent `BOUTIQUE`, huit
+`DERRIERE S3-A2`, sept `S1-A11-2`. S'y ajoutent des variantes d'écriture qui désignent
+probablement le même endroit — `BOUTIQUE`, `B-BOUTIQUE` (122 articles), `B- BOUTIQUE` (96).
+
+Dolibarr impose l'unicité du libellé sur **toute l'entité** (`uk_entrepot_label`), et non
+sous le parent. **Décision : les homonymes stricts sont fusionnés** (93 emplacements), le
+premier numéro rencontré l'emportant. Les variantes d'écriture restent distinctes : rien ne
+prouve qu'elles désignent le même emplacement physique, et les fusionner serait irréversible.
+
+### E3. Emplacements sans libellé
+
+Trois emplacements occupés (345, 512, 706 — 16 articles, dont 8 avec du stock) n'ont aucun
+libellé. Dolibarr refuse un entrepôt sans nom : leur numéro d'origine en tient lieu,
+`Emplacement 345`.
+
+### E4. Libellés fantaisistes
+
+`blibli` (19), `AFFECTER` (836 et 841), `B` (380), `M` (397), et une **adresse client
+complète** saisie en guise d'emplacement (590 : `2V MIGNOTTE SYLVAIN 22 ROUTE DE CAR`).
+Quatre d'entre eux sont effectivement occupés.
+
+**Décision : repris tels quels.** Ce sont de vraies saisies, au client de les corriger en
+connaissance de cause.
+
+### E5. Emplacements supprimés dans l'ancien ERP
+
+Huit numéros encore portés par des articles sont absents de l'extraction : **605 à 611, et
+639**, pour 114 articles.
+
+**Ce ne sont pas des trous d'extraction.** Leurs voisins immédiats sont bien présents —
+604 `R14`, 612 `COMPLEMENT AUX CARTES AERO`, 638 `S1-A12-2`, 640 `T8`. Il ne s'agit donc
+pas d'une page manquée à la copie mais de **trous dans la séquence** : ces emplacements ont
+été supprimés dans l'ancien ERP sans que leur contenu soit réaffecté. Le numéro 631 manque
+également, simplement plus aucun article ne le référence.
+
+L'impact réel est faible : sur les 114 articles, **99 ont un stock à zéro**. Seuls **15
+portent réellement du stock**, pour 161 unités, dont une ligne à −12.
+
+| Numéro | Articles | Avec du stock | Quantité |
+|---:|---:|---:|---:|
+| 605 | 23 | 5 | 29 |
+| 606 | 10 | 0 | 0 |
+| 607 | 12 | 2 | 8 |
+| 608 | 6 | 1 | 48 |
+| 609 | 20 | 3 | 30 |
+| 610 | 13 | 1 | −12 |
+| 611 | 22 | 2 | 36 |
+| 639 | 8 | 1 | 22 |
+
+**Décision : un entrepôt de repli « À localiser »**, créé sous l'entrepôt principal et
+marqué `SAGE:ORPHELIN`. Les regrouper là plutôt que de les mêler à l'entrepôt principal les
+rend identifiables d'un coup d'oeil — c'est tout l'intérêt, leur localisation physique étant
+à retrouver.
+
+Le libellé est une consigne et non un constat, et son accent initial le fait remonter en
+tête des sélecteurs d'entrepôt : il restera visible tant que le rangement n'aura pas été
+fait. Sa description porte la liste des numéros concernés.
+
+À ne pas confondre avec deux situations voisines, volontairement traitées ailleurs : les
+trois emplacements **sans libellé** (E3), qui existent toujours dans l'ancien ERP et
+redeviendront exploitables si quelqu'un les y nomme ; et les quelque 2 000 lignes **sans
+aucun emplacement** (E6), qui vont dans l'entrepôt principal — un article jamais rangé n'est
+pas une anomalie de données, et les mêler noierait les 15 vrais cas.
+
+### E6. Un tiers du stock n'a aucun emplacement
+
+Sur les 15 839 lignes du dépôt principal, **6 575 seulement portent un emplacement**. Parmi
+les lignes qui ont réellement du stock, **1 980 n'en ont aucun** — soit 35 %.
+
+Ce n'est pas une anomalie de la reprise mais un état de fait de l'ancien ERP.
+
+### E7. Un seul emplacement par article, contrairement à ce qui était annoncé
+
+Le client indiquait qu'un article pouvait occuper jusqu'à quatre emplacements. Le schéma
+n'en permet **qu'un** : `DP_NoPrincipal`, la clé primaire `(AR_Ref, DE_No)` interdisant
+plusieurs lignes par article et par dépôt. `DP_NoControle`, seul autre champ possible, est
+**NULL sur les 27 670 lignes**.
+
+Soit la mécanique multi-emplacements vit dans Sage sans avoir été répliquée, soit dans un
+outil externe — `f_article.flag_wms` laisse penser qu'un système de gestion d'entrepôt a
+existé. **À faire confirmer avant d'aller plus loin.**
+
+---
+
 ## Pièges Dolibarr rencontrés
 
 ### P1. `purge.php product --confirm` détruit des produits de la boutique
@@ -502,6 +620,28 @@ adoptions par un second marqueur, soit refuser la purge hors développement.
 
 Le script `supplierprice` ne souffre pas de ce défaut : il ne marque jamais une ligne
 préexistante, et sa purge est donc bornée à ce qu'il a lui-même créé.
+
+### P3. `Entrepot::create()` crée un entrepôt fermé
+
+La méthode insère une ligne minimale puis appelle `update()`, qui écrit **sans condition**
+`statut`, `warehouse_usage` et `fk_user_author` depuis les propriétés de l'objet. Les
+laisser vides donne un entrepôt **fermé** malgré le `DEFAULT 1` de la colonne, d'usage `0`
+— valeur qui n'est ni `USAGE_INTERNAL` ni `USAGE_EXTERNAL` —, et sans auteur.
+
+C'est exactement l'état des trois entrepôts de démonstration présents en base. Le script
+`warehouse` positionne les trois propriétés avant l'appel.
+
+À l'inverse, `update()` écrit bien `import_key` : le marqueur de reprise est posé dès la
+création, sans la seconde passe qu'impose `llx_product_fournisseur_price`.
+
+### P4. L'unicité des entrepôts porte sur l'entité, pas sur le parent
+
+`uk_entrepot_label (ref, entity)`. Un nom d'entrepôt est donc unique dans toute la base :
+il est impossible d'avoir un `RANG-A` sous `ETAG-A` **et** sous `ETAG-B`. Toute
+arborescence d'entrepôts doit porter des noms complets et uniques.
+
+Sans conséquence sur cette reprise, les libellés de l'ancien ERP étant déjà positionnels
+(`S1-A15-4`), mais structurant pour toute réorganisation ultérieure.
 
 ### P2. `llx_product_fournisseur_price_log` n'est jamais nettoyée
 
