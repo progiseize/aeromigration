@@ -6,6 +6,20 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.7.1] — 2026-07-29
+
+### Corrigé
+
+- **La progression était fausse dès qu'on reprenait au curseur.** Le total affiché portait
+  sur la source entière, alors que le compteur ne comptait que les lignes de ce passage :
+  après une interruption à 80 %, la relance repartait de « 0,3 % » sur 157 102. Le décompte
+  tient désormais compte du curseur de départ et de la limite, et l'en-tête distingue le
+  restant à lire du nombre de lignes que le passage traitera.
+
+  Au passage, la clause de reprise, jusque-là écrite en dur dans la lecture, est partagée
+  avec le décompte : c'est ce qui garantit que les deux portent sur le même ensemble.
+
+
 ## [0.7.0] — 2026-07-29
 
 ### Reprise des stocks

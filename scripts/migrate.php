@@ -195,18 +195,27 @@ if ($referenceDate > 0) {
     $runner->referenceDate = $referenceDate;
 }
 
-$total = $runner->countSource();
+// countSource() tient compte du curseur : sur une reprise, il retourne ce qui reste à
+// lire, non la source entière. La limite s'y ajoute pour donner le nombre de lignes que
+// ce passage traitera réellement — c'est sur lui que se calcule la progression.
+$remaining = $runner->countSource();
+$total     = ($limit > 0 && $limit < $remaining) ? $limit : $remaining;
 
 echo "Script          : ".$langs->trans($definition['label'])." (".$definition['code'].")\n";
 echo "Utilisateur     : ".$user->login."\n";
-echo "Source          : ".$total." enregistrement(s)\n";
 echo "Mode            : ".($dryrun ? "SIMULATION (aucune écriture)" : "ÉCRITURE")."\n";
 echo "Tranche         : ".$batch."\n";
+if ($cursor !== null && $cursor !== '') {
+    echo "Reprise après   : ".$cursor."\n";
+    echo "Restant à lire  : ".$remaining." enregistrement(s)\n";
+} else {
+    echo "Source          : ".$remaining." enregistrement(s)\n";
+}
 if ($limit > 0) {
     echo "Limite          : ".$limit."\n";
 }
-if ($cursor !== null && $cursor !== '') {
-    echo "Reprise après   : ".$cursor."\n";
+if ($total !== $remaining) {
+    echo "Ce passage      : ".$total." enregistrement(s)\n";
 }
 if ($runner->referenceDate > 0) {
     echo "Date des écritures : ".dol_print_date($runner->referenceDate, 'day')."\n";

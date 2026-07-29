@@ -398,15 +398,55 @@ abstract class AeroMigrationRunner
     }
 
     /**
-     * Nombre total d'enregistrements à traiter dans la source.
+     * Clause SQL de reprise après un curseur.
+     *
+     * Partagée par la lecture et le décompte, pour qu'ils portent toujours sur le même
+     * ensemble : sans cela, une reprise au curseur rapporterait sa progression à la
+     * source entière et afficherait un pourcentage dénué de sens.
+     *
+     * @param int|string|null $cursor Dernière valeur de curseur déjà traitée
+     * @return string                 Condition SQL, chaîne vide s'il n'y a pas de reprise
+     */
+    protected function buildCursorCondition($cursor)
+    {
+        // Pas de clause au premier passage : une comparaison à '' écarterait
+        // silencieusement une éventuelle clé vide.
+        if ($cursor === null || $cursor === '') {
+            return '';
+        }
+
+        $field = ($this->srcCursorSqlField !== '') ? $this->srcCursorSqlField : $this->srcCursorField;
+
+        if ($this->srcCursorType === 'string') {
+            return $field." > '".$this->db->escape($cursor)."'";
+        }
+
+        return $field.' > '.((int) $cursor);
+    }
+
+    /**
+     * Nombre d'enregistrements que ce passage a devant lui.
+     *
+     * Tient compte du curseur de départ : sur une reprise, ce qui le précède a déjà été
+     * traité et n'a pas à entrer dans le décompte. La limite éventuelle, elle, reste du
+     * ressort de l'appelant.
      *
      * @return int Nombre de lignes, -1 en cas d'erreur SQL
      */
     public function countSource()
     {
-        $sql = 'SELECT COUNT(*) as nb FROM '.$this->srcTable;
+        $conditions = array();
         if ($this->srcWhere !== '') {
-            $sql .= ' WHERE '.$this->srcWhere;
+            $conditions[] = '('.$this->srcWhere.')';
+        }
+        $cursorCondition = $this->buildCursorCondition($this->startCursor);
+        if ($cursorCondition !== '') {
+            $conditions[] = $cursorCondition;
+        }
+
+        $sql = 'SELECT COUNT(*) as nb FROM '.$this->srcTable;
+        if ($conditions) {
+            $sql .= ' WHERE '.implode(' AND ', $conditions);
         }
 
         $resql = $this->db->query($sql);
@@ -468,14 +508,9 @@ abstract class AeroMigrationRunner
         if ($this->srcWhere !== '') {
             $conditions[] = '('.$this->srcWhere.')';
         }
-        // Pas de clause de reprise au premier passage : une comparaison à '' écarterait
-        // silencieusement une éventuelle clé vide.
-        if ($cursor !== null && $cursor !== '') {
-            if ($this->srcCursorType === 'string') {
-                $conditions[] = $cursorSql." > '".$this->db->escape($cursor)."'";
-            } else {
-                $conditions[] = $cursorSql.' > '.((int) $cursor);
-            }
+        $cursorCondition = $this->buildCursorCondition($cursor);
+        if ($cursorCondition !== '') {
+            $conditions[] = $cursorCondition;
         }
 
         $sql  = 'SELECT '.$this->srcFields.' FROM '.$this->srcTable;
