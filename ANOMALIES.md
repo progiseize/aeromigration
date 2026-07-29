@@ -497,6 +497,7 @@ vaut `1` que sur 710 lignes, `AF_Conversion` et `AF_ConvDiv` sont entièrement n
 | E3 | Emplacements sans libellé | 3 occupés | Nommés d'après leur numéro |
 | E4 | Libellés fantaisistes | 6 | Repris tels quels |
 | E5 | Emplacements supprimés dans l'ancien ERP | 8 (114 articles) | Entrepôt de repli « À localiser » |
+| E7 | Un seul emplacement par article dans la source | 27 670 lignes | Sans objet : Dolibarr en autorise autant qu'on veut |
 
 ### E1. Les libellés n'étaient nulle part dans les données
 
@@ -593,16 +594,138 @@ les lignes qui ont réellement du stock, **1 980 n'en ont aucun** — soit 35 %.
 
 Ce n'est pas une anomalie de la reprise mais un état de fait de l'ancien ERP.
 
-### E7. Un seul emplacement par article, contrairement à ce qui était annoncé
+### E7. Un seul emplacement par article dans la source, plusieurs possibles dans Dolibarr
 
-Le client indiquait qu'un article pouvait occuper jusqu'à quatre emplacements. Le schéma
-n'en permet **qu'un** : `DP_NoPrincipal`, la clé primaire `(AR_Ref, DE_No)` interdisant
-plusieurs lignes par article et par dépôt. `DP_NoControle`, seul autre champ possible, est
-**NULL sur les 27 670 lignes**.
+L'ancien ERP ne gère **qu'un emplacement par article** : `DP_NoPrincipal`, la clé primaire
+`(AR_Ref, DE_No)` interdisant plusieurs lignes par article et par dépôt. `DP_NoControle`,
+seul autre champ possible, est NULL sur les 27 670 lignes.
 
-Soit la mécanique multi-emplacements vit dans Sage sans avoir été répliquée, soit dans un
-outil externe — `f_article.flag_wms` laisse penser qu'un système de gestion d'entrepôt a
-existé. **À faire confirmer avant d'aller plus loin.**
+Les « quatre emplacements » évoqués au démarrage ne sont donc pas une donnée à retrouver
+mais un **besoin exprimé pour la cible** — et il ne demande aucun développement :
+`uk_product_stock (fk_product, fk_entrepot)` autorise une ligne de stock par couple
+produit/entrepôt, sans limite de nombre. Un article pourra donc être présent dans quatre
+emplacements, ou dans vingt.
+
+**Conséquence pour la reprise** : elle pose le stock dans l'unique emplacement connu de la
+source. La ventilation sur plusieurs emplacements se fera ensuite dans Dolibarr, par les
+transferts de stock, au fil du rangement réel.
+
+---
+
+## Stocks (`f_artstock`)
+
+| # | Anomalie | Volume | Décision |
+|---|---|---:|---|
+| S1 | Un seul dépôt réel sur trois déclarés | 11 831 lignes écartées | Dépôt 1 uniquement |
+| S2 | Ligne sans référence article | 1 (−1 826) | Écartée et signalée |
+| S3 | Quantités négatives | 131 (−954) | Reprises telles quelles |
+| S4 | `AS_MontSto` est unitaire malgré son nom | 1 755 | Ignorée |
+| S5 | `AS_QteDispo` est un cache, pas une donnée | 27 670 | Non repris |
+| S6 | Lignes sans stock mais avec seuil | 236 | Reprises pour leurs seuils |
+| S7 | Seuils d'alerte négatifs | 2 | Ramenés à zéro |
+| S8 | Articles porteurs de stock devenus services | 3 (−14) | Écartés et signalés |
+
+### S1. Un seul dépôt réel
+
+`f_depot` en déclare deux, la source en utilise trois :
+
+| Dépôt | Lignes | Contenu |
+|---|---:|---|
+| 1 — `boutique.aero` | 15 839 | **La totalité du stock**, des seuils, des emplacements |
+| 999 — `Siege boutique.aero` | 11 826 | **Intégralement à zéro**, y compris réservé et commandé |
+| 0 — *non déclaré* | 5 | Cinq lignes négatives, cumul −68 |
+
+Les deux dépôts partagent d'ailleurs la même adresse, et les 19 caisses de `f_caisse`
+pointent toutes sur le dépôt 1. **Décision : seul le dépôt 1 est repris.**
+
+### S2. Une ligne de stock sans référence article
+
+Une ligne du dépôt 1 a un `AR_Ref` vide et porte **−1 826 unités** — le plus gros écart de
+toute la reprise. Aucun produit où la poser : elle est écartée par le filtre de lecture,
+mais **dénombrée et affichée au rapport**, pour qu'elle ne disparaisse pas du récit.
+
+### S3. Quantités négatives
+
+131 lignes reprises, cumul −954. Dolibarr les accepte,
+`STOCK_DISALLOW_NEGATIVE_TRANSFER` n'étant pas posée. **Décision : reprises telles quelles**,
+et listées au rapport — la photo doit rester fidèle, y compris dans ses incohérences.
+
+Parmi elles, 32 articles composés dérivent : leur stock propre est décrémenté à la vente sans
+que rien ne l'alimente. La table de nomenclature de Sage n'ayant pas été importée, il n'y a
+rien à en tirer de plus.
+
+### S4. `AS_MontSto` n'est pas un montant
+
+Malgré son nom, la colonne porte une valeur **unitaire** : sur les 1 755 lignes renseignées,
+1 555 égalent `AS_CoutStd` et 1 297 `AS_PrixRU`, contre **53 seulement** pour
+`quantité × prix`. Elle n'est d'ailleurs remplie que sur 6 % des lignes, dont 429 à stock nul.
+
+**Décision : ignorée.** La valorisation se calcule.
+
+### S5. `AS_QteDispo` est un cache
+
+Vérifié : `AS_QteDispo = AS_QteSto − AS_QteRes − AS_QtePrepa`, à 99,3 %. Le taux global est
+trompeur — 98 % des lignes ont réservé et préparation à zéro — mais le segment discriminant
+tranche : sur les 162 lignes où `AS_QtePrepa` n'est pas nul, la formule tient sur 146 contre
+5 pour sa concurrente. `AS_QteCom`, l'attendu fournisseur, n'entre pas dans le disponible.
+
+186 lignes s'écartent de la formule : c'est un champ recalculé par l'applicatif, qui peut
+désynchroniser. **Décision : ni le disponible, ni le réservé, ni le commandé ne sont repris.**
+Dolibarr les recalcule depuis les commandes.
+
+Quatre colonnes sont par ailleurs intégralement à zéro : `AS_QteResCM`, `AS_QteComCM`,
+`AS_QteSIS`, `as_qteroul`. La contremarque n'est pas utilisée, ce que confirme
+`AR_Contremarque`, NULL sur 15 799 articles.
+
+### S6. Des lignes sans stock mais avec seuil
+
+236 lignes ont une quantité nulle et un seuil renseigné. Un filtre sur la seule quantité les
+perdrait alors qu'elles portent une information réelle.
+
+**Conséquence à connaître** : ne produisant aucun mouvement, elles n'entrent jamais dans
+l'index d'idempotence et sont **retraitées à chaque passage**, comptées en « mis à jour ».
+Sans danger — réécrire le même seuil est idempotent — mais cela explique pourquoi le
+compteur n'est jamais à zéro. L'alternative, poster un mouvement de quantité nulle pour les
+marquer, aurait pollué l'historique de 236 lignes vides.
+
+### S7. Seuils d'alerte négatifs
+
+Deux articles portent `AS_QteMini = −200`. Un seuil d'alerte négatif ne se déclencherait
+jamais et s'afficherait comme une aberration sur la fiche : **ramenés à zéro et signalés**.
+
+### S8. Des articles porteurs de stock devenus des services
+
+Trois articles ont du stock dans l'ancien ERP mais sont de type « service » dans Dolibarr :
+`#10548` (−9), `#07338` (−4), `#09163` (−1).
+
+Dolibarr ne déplace pas le stock d'un service tant que `STOCK_SUPPORTS_SERVICES` n'est pas
+activée. **Décision : écartés et listés nommément au rapport, avec le remède** — les passer
+en type « Produit » puis relancer. Le script ne change pas leur type de lui-même : ils sont
+synchronisés avec la boutique, où cela aurait des conséquences.
+
+### S9. L'historique des mouvements est reconstituable, mais n'est pas repris
+
+`f_docligne_global.DL_MvtStock`, la colonne censée marquer les lignes qui bougent le stock,
+**est vide** : 28 lignes sur 1 039 279. Toute reprise qui s'appuierait dessus produirait zéro
+mouvement, en silence.
+
+L'historique reste pourtant reconstituable par le type de document :
+
+```
+AS_QteSto = AS_QteInv
+          + réceptions (domaine 1, type 13) + entrées (domaine 2, type 20)
+          − factures (domaine 0, types 6 et 7) − sorties (domaine 2, type 21)
+          sur les documents postérieurs à date_inventaire
+```
+
+**Vérifié à 98,9 %** sur les 15 687 articles suivis en stock. À noter : les préparations, les
+bons de livraison et les factures fournisseur ne bougent pas le stock — la sortie se fait à
+la facturation, l'entrée à la réception.
+
+**Décision : non repris.** Un stock d'ouverture suffit, et l'historique reste consultable
+dans l'ancien ERP. La formule est consignée ici si le besoin se présentait — il faudrait
+alors compter environ 581 000 mouvements et nettoyer au préalable les dates d'inventaire
+aberrantes : 519 à `0000-00-00`, 109 en année **9202**, 2 en 2027.
 
 ---
 
@@ -620,6 +743,18 @@ adoptions par un second marqueur, soit refuser la purge hors développement.
 
 Le script `supplierprice` ne souffre pas de ce défaut : il ne marque jamais une ligne
 préexistante, et sa purge est donc bornée à ce qu'il a lui-même créé.
+
+### P2. `llx_product_fournisseur_price_log` n'est jamais nettoyée
+
+`remove_product_fournisseur_price()` supprime la ligne tarifaire, pas son journal, et aucune
+API ne le permet. Chaque purge laisse donc des lignes de log orphelines — il y en avait déjà
+quatre, issues d'essais manuels.
+
+Sans gravité fonctionnelle, mais trompeur : `rowid` étant auto-incrémenté, un journal
+orphelin peut se retrouver rattaché à une ligne tarifaire ultérieure sans rapport. À nettoyer
+à la main en développement.
+
+---
 
 ### P3. `Entrepot::create()` crée un entrepôt fermé
 
@@ -643,17 +778,40 @@ arborescence d'entrepôts doit porter des noms complets et uniques.
 Sans conséquence sur cette reprise, les libellés de l'ancien ERP étant déjà positionnels
 (`S1-A15-4`), mais structurant pour toute réorganisation ultérieure.
 
-### P2. `llx_product_fournisseur_price_log` n'est jamais nettoyée
+### P5. `correct_stock()` annonce un succès quand rien n'a été écrit
 
-`remove_product_fournisseur_price()` supprime la ligne tarifaire, pas son journal, et aucune
-API ne le permet. Chaque purge laisse donc des lignes de log orphelines — il y en avait déjà
-quatre, issues d'essais manuels.
+La méthode teste `if ($result >= 0)` (product.class.php:6243) et retourne `1`. Or
+`MouvementStock::_create()` retourne **`0`** — et non un code négatif — lorsqu'il n'a rien
+fait : produit inexistant, entrepôt vide, ou **produit que Dolibarr ne gère pas en stock**.
 
-Sans gravité fonctionnelle, mais trompeur : `rowid` étant auto-incrémenté, un journal
-orphelin peut se retrouver rattaché à une ligne tarifaire ultérieure sans rapport. À nettoyer
-à la main en développement.
+Trois articles de la source sont des services en cible : leur stock aurait disparu sans le
+moindre message, avec un compteur annonçant un succès complet.
 
----
+La méthode ne sait par ailleurs **pas dater un mouvement** — sa signature n'expose pas
+`$datem`, contrairement à `_create()`.
+
+**Le script appelle donc `_create()` directement**, teste `<= 0` et non `< 0`, et détecte les
+services avant d'écrire.
+
+### P6. `MouvementStock::delete()` ne recalcule pas le stock
+
+C'est un `deleteCommon()` : il supprime la ligne d'historique **et rien d'autre**. Ni
+`llx_product_stock.reel`, ni `llx_product.stock`, ni le coût moyen ne sont recalculés.
+
+Supprimer un mouvement laisse donc le stock en place, privé de sa trace d'origine — le pire
+des deux mondes. Toute annulation doit passer par une **contre-passation**, qui repasse par
+`_create()` et laisse le coeur remettre les compteurs en état.
+
+### P7. `llx_product_stock` porte un `import_key` qu'aucune classe n'écrit
+
+La colonne existe, et l'index unique `(fk_product, fk_entrepot)` en ferait une clé
+d'idempotence idéale. Mais `_create()` ne la touche pas, et **aucune classe du coeur n'a
+`table_element = 'product_stock'`** — vérifié sur l'ensemble du code. Il n'existe pas d'objet
+métier pour cette table.
+
+L'écrire imposerait une requête directe. Le script se rabat sur `inventorycode`, prévu pour
+cela par le coeur.
+
 
 ## Tiers (`f_comptet`)
 

@@ -19,11 +19,13 @@
  *   --cursor=N       Reprend le parcours après cette valeur de curseur
  *   --update         Met à jour les objets déjà migrés au lieu de les ignorer
  *   --user=LOGIN     Utilisateur au nom duquel créer les objets (défaut : 1er admin)
+ *   --date=AAAA-MM-JJ  Date des écritures qui n'en ont pas dans la source
  *
  * Exemples :
  *   php migrate.php thirdparty --dry-run
  *   php migrate.php thirdparty --limit=50
  *   php migrate.php thirdparty --cursor=48120
+ *   php migrate.php stock --date=2026-08-01
  */
 
 if (!defined('NOTOKENRENEWAL')) {
@@ -73,6 +75,7 @@ $batch          = 200;
 $cursor         = null;
 $updateExisting = false;
 $userLogin      = '';
+$referenceDate  = 0;
 
 for ($i = 1; $i < $argc; $i++) {
     $arg = $argv[$i];
@@ -90,6 +93,17 @@ for ($i = 1; $i < $argc; $i++) {
         $cursor = $m[1];
     } elseif (preg_match('/^--user=(.+)$/', $arg, $m)) {
         $userLogin = $m[1];
+    } elseif (preg_match('/^--date=(\d{4})-(\d{2})-(\d{2})$/', $arg, $m)) {
+        // Date des écritures que la source ne date pas — un stock d'ouverture, par
+        // exemple. Sans cette option, elles portent l'instant du passage.
+        //
+        // dol_mktime() plutôt que dol_stringtotime() : cette dernière vit dans
+        // date.lib.php, que le bootstrap CLI ne charge pas.
+        $referenceDate = dol_mktime(0, 0, 0, (int) $m[2], (int) $m[3], (int) $m[1], 'tzserver');
+        if (empty($referenceDate) || $referenceDate <= 0) {
+            echo "Date non exploitable : ".$m[1].'-'.$m[2].'-'.$m[3]."\n";
+            exit(1);
+        }
     } elseif ($scriptCode === '' && substr($arg, 0, 2) !== '--') {
         $scriptCode = $arg;
     } else {
@@ -101,7 +115,7 @@ for ($i = 1; $i < $argc; $i++) {
 $scripts = aeromigrationGetScripts();
 
 if ($scriptCode === '') {
-    echo "Usage: php ".$script_file." <script> [--dry-run] [--limit=N] [--batch=N] [--cursor=N] [--update] [--user=LOGIN]\n\n";
+    echo "Usage: php ".$script_file." <script> [--dry-run] [--limit=N] [--batch=N] [--cursor=N] [--update] [--user=LOGIN] [--date=AAAA-MM-JJ]\n\n";
     echo "Scripts disponibles :\n";
     if (empty($scripts)) {
         echo "  (aucun)\n";
@@ -176,6 +190,11 @@ if ($updateExisting) {
     $runner->updateExisting = true;
 }
 
+// Même précaution : sans --date, on laisse au script sa propre valeur.
+if ($referenceDate > 0) {
+    $runner->referenceDate = $referenceDate;
+}
+
 $total = $runner->countSource();
 
 echo "Script          : ".$langs->trans($definition['label'])." (".$definition['code'].")\n";
@@ -188,6 +207,9 @@ if ($limit > 0) {
 }
 if ($cursor !== null && $cursor !== '') {
     echo "Reprise après   : ".$cursor."\n";
+}
+if ($runner->referenceDate > 0) {
+    echo "Date des écritures : ".dol_print_date($runner->referenceDate, 'day')."\n";
 }
 echo str_repeat('-', 60)."\n";
 

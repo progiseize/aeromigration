@@ -6,6 +6,66 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.7.0] — 2026-07-29
+
+### Reprise des stocks
+
+- **Nouveau script `stock`** : **5 687 mouvements d'ouverture**, **167 844 unités**,
+  valorisées **1 274 861 €** au coût standard. Vérifié : le stock Dolibarr reproduit celui
+  de l'ancien ERP **sans le moindre écart**, article par article.
+- **Photo d'ouverture, pas rejeu d'historique.** L'ancien ERP conserve environ 581 000
+  lignes de mouvements ; elles y restent consultables. La formule permettant de les rejouer
+  a été établie et vérifiée à 98,9 %, elle est consignée dans `ANOMALIES.md` si le besoin
+  se présentait.
+- **Ventilation par emplacement** : 3 418 lignes dans leur sous-entrepôt, 218 dans un
+  entrepôt fusionné retrouvé par son libellé, 1 989 sans emplacement d'origine versées dans
+  l'entrepôt principal, et 15 dans « À localiser ».
+- **Seuils de réapprovisionnement repris** : 924 seuils d'alerte, 978 stocks désirés. Écrits
+  sur l'article et non par entrepôt — `llx_product_warehouse_properties` n'est lue que par
+  le réapprovisionnement, et seulement si `STOCK_ALLOW_ADD_LIMIT_STOCK_BY_WAREHOUSE` est
+  activée, ce qui n'est pas le cas. Les seuils y seraient invisibles partout.
+- **131 quantités négatives reprises telles quelles**, cumul −954, et listées au rapport.
+- Nouvelle option **`--date=AAAA-MM-JJ`** pour caler les écritures que la source ne date pas
+  sur la date de bascule convenue, plutôt que sur l'instant du passage.
+
+### Trois pièges du coeur Dolibarr
+
+**`correct_stock()` annonce un succès quand rien n'a été écrit.** Elle teste
+`if ($result >= 0)` alors que `MouvementStock::_create()` retourne **`0`** — et non un code
+négatif — lorsqu'il n'a rien fait, notamment sur un produit que Dolibarr ne gère pas en
+stock. Trois articles de la source sont des services en cible : **leur stock aurait disparu
+sans le moindre message**. Le script appelle donc `_create()` directement, teste `<= 0`, et
+détecte les services avant d'écrire pour les signaler nommément avec leur remède.
+
+Cette méthode ne sait par ailleurs pas dater un mouvement, ce qui la rendait de toute façon
+inutilisable pour une bascule.
+
+**`llx_product_stock` porte un `import_key` qu'aucune classe n'écrit.** La colonne existe et
+son index unique en ferait une clé d'idempotence idéale, mais aucune classe du coeur n'a
+`table_element = 'product_stock'` et `_create()` ne la touche pas. L'écrire aurait imposé
+une requête directe, que la règle du module interdit.
+
+L'idempotence passe donc par **`inventorycode`**, écrit par `_create()` et dont la vocation
+déclarée dans le coeur est précisément de regrouper plusieurs mouvements en une opération.
+Tous portent `SAGE:OUVERTURE` — le client filtre dessus dans **Produits > Stocks >
+Mouvements** pour retrouver la reprise en entier.
+
+**`MouvementStock::delete()` ne recalcule rien.** Il retire la ligne d'historique et rien
+d'autre : ni le stock par entrepôt, ni le stock dénormalisé du produit, ni le coût moyen. Le
+stock resterait en place, privé de sa trace d'origine. La purge contre-passe donc chaque
+mouvement avant de supprimer les deux lignes — vérifié : 5 687 traités, 0 échec, tout revient
+exactement à zéro.
+
+### Ce que le script ne fait pas
+
+- **12 références absentes de `f_article`** et une ligne sans référence du tout (−1 826
+  unités) : écartées et signalées.
+- **`f_consigne`** — 279 lignes de stock déposé chez des clients, cumul −4 630 — reste hors
+  périmètre, rappelé à chaque passage. Le reprendre supposerait un entrepôt par dépositaire,
+  soit un choix de modèle de gestion et non un stock d'ouverture.
+- **2 seuils d'alerte négatifs** (−200) ramenés à zéro : ils ne se seraient jamais déclenchés.
+
+
 ## [0.6.0] — 2026-07-29
 
 ### Reprise des entrepôts et des emplacements

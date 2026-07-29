@@ -105,5 +105,13 @@ function aeromigrationGetScripts()
             'class' => 'MigrationWarehouse',
             'file'  => '/aeromigration/class/migrationwarehouse.class.php',
         ),
+        // Dépend des articles ET des entrepôts : ce sont les deux extrémités d'un
+        // mouvement. S'arrête si l'entrepôt principal est absent.
+        array(
+            'code'  => 'stock',
+            'label' => 'AeroMigScriptStock',
+            'class' => 'MigrationStock',
+            'file'  => '/aeromigration/class/migrationstock.class.php',
+        ),
     );
 }

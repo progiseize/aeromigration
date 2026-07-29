@@ -17,6 +17,8 @@ Vos données ont été transférées depuis ADD vers Dolibarr :
 | Catégories de produits | 504 |
 | Articles | 15 811 |
 | Tarifs fournisseurs | 15 950 |
+| **Emplacements de stockage** | **719** |
+| **Articles en stock** | **5 687**, soit 167 844 unités |
 
 Les articles déjà présents dans la boutique en ligne n'ont **pas** été dupliqués : ils ont
 été reconnus et complétés avec les informations que seul ADD possédait. Il en va de même
@@ -24,6 +26,33 @@ pour vos clients.
 
 L'opération est **rejouable** : nous pouvons la relancer autant de fois que nécessaire d'ici
 la mise en service, sans créer de doublons ni écraser vos corrections manuelles.
+
+### Vos stocks
+
+Le stock a été repris **article par article, sans le moindre écart** avec ADD — nous l'avons
+vérifié ligne à ligne. Sa valeur s'établit à **1 274 861 €**.
+
+Chaque article est rangé dans son emplacement d'origine, sous un entrepôt principal
+« boutique.aero » :
+
+| | |
+|---|---:|
+| Articles rangés dans leur emplacement | 3 636 |
+| Articles sans emplacement dans ADD | 1 989 |
+| Articles dont l'emplacement a disparu | 15 |
+
+Vos **819 emplacements** ont demandé un détour : leurs libellés n'existaient dans aucune des
+données livrées, seuls des numéros y figuraient. Nous les avons finalement retrouvés dans
+l'affichage d'ADD, ce qui permet aujourd'hui de lire « S1-A15-4 » plutôt qu'un numéro.
+
+Deux précisions utiles pour la suite. **Un article pourra occuper autant d'emplacements que
+vous le souhaitez** dans Dolibarr — les quatre que vous évoquiez, ou davantage : cela ne
+demande aucun développement, la répartition se fera par simples transferts de stock. Et si
+vous souhaitez plus tard regrouper vos emplacements par zone (salle, allée, niveau), ce sera
+possible sans rien renommer : vos libellés portent déjà cette information.
+
+Enfin, **l'historique des mouvements n'a pas été repris** : le stock est repris comme une
+photo à la date de bascule. Vos mouvements passés restent consultables dans ADD.
 
 ---
 
@@ -81,7 +110,41 @@ aucune durée de garantie** — le champ prévu pour cela est vide sur la totali
 il faudra les saisir. Dites-nous si une règle générale s'applique (par exemple 24 mois par
 défaut sur une famille d'articles), nous pourrons l'appliquer en une fois.
 
-### 5. Un point de vigilance avant votre première campagne e-mail
+### 5. Quinze articles dont l'emplacement a disparu
+
+Huit emplacements ont été supprimés dans ADD sans que les articles qui s'y trouvaient soient
+réaffectés ailleurs. Ils concernent 114 articles, dont **99 ont un stock à zéro** : seuls
+**15 demandent qu'on aille les chercher**, pour 161 unités au total.
+
+Nous les avons regroupés dans un emplacement nommé **« À localiser »**, visible en tête de
+vos listes d'entrepôts. Leurs quantités sont justes, c'est seulement leur position physique
+qui manque — et elle manquait déjà dans ADD.
+
+**Ce que nous attendons de vous :** que le magasinier les retrouve et les range, puis saisisse
+leur emplacement réel. La liste des 15 vous sera transmise.
+
+### 6. Trois articles enregistrés comme des prestations
+
+Trois articles portent du stock dans ADD mais sont enregistrés comme des **prestations de
+service** dans votre boutique en ligne — et donc dans Dolibarr, qui ne gère pas de stock pour
+ce type d'article. Les quantités concernées sont négatives : −9, −4 et −1.
+
+**Ce que nous attendons de vous :** nous dire s'il s'agit bien de produits physiques. Si oui,
+nous les basculons en « produit » et leur stock est repris ; sinon il n'y a rien à faire, ces
+quantités négatives étant de toute façon des scories.
+
+### 7. De la marchandise déposée chez vos clients
+
+ADD enregistre du stock en dépôt chez des tiers : 279 enregistrements, portant sur 2 articles
+seulement, pour des quantités en grande partie négatives.
+
+Dolibarr raisonne en entrepôts et n'a pas d'équivalent direct. Nous pouvons créer un
+emplacement dédié par dépositaire, ou considérer que ce suivi n'a plus lieu d'être.
+
+**Ce que nous attendons de vous :** votre choix, en fonction de l'usage que vous en avez
+réellement aujourd'hui.
+
+### 8. Un point de vigilance avant votre première campagne e-mail
 
 Les 2 621 désinscriptions newsletter ont été reprises. Dolibarr raisonne par **adresse
 e-mail** et non par fiche client.
@@ -146,6 +209,23 @@ Tout a été harmonisé, à 22 fiches près (voir plus bas).
 
 7 rubriques de votre catalogue portaient le même nom sous la même rubrique parente. Elles
 ont été fusionnées.
+
+### Des emplacements en double
+
+Le même constat côté stockage : 70 libellés d'emplacement étaient utilisés plusieurs fois —
+huit emplacements distincts s'appelaient « BOUTIQUE ». Dolibarr n'accepte qu'un emplacement
+par nom : ils ont été regroupés, et le stock de chacun reversé au même endroit.
+
+Trois emplacements n'avaient aucun nom du tout. Ils portent désormais leur numéro d'origine
+(« Emplacement 512 ») ; les nommer dans ADD suffirait à récupérer leur libellé.
+
+### Des seuils de réapprovisionnement inutilisables
+
+924 seuils d'alerte et 978 stocks désirés ont été repris, ce qui permettra à Dolibarr de vous
+signaler les ruptures dès la mise en service.
+
+Deux d'entre eux étaient négatifs (−200) : un seuil d'alerte en dessous de zéro ne se serait
+jamais déclenché. Ils ont été ramenés à zéro.
 
 ---
 

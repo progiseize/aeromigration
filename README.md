@@ -30,6 +30,7 @@ php migrate.php category       catalogue
 php migrate.php product        articles        → rattachés aux catégories
 php migrate.php supplierprice  tarifs fournisseurs → relient articles et tiers
 php migrate.php warehouse      entrepôts et emplacements
+php migrate.php stock          stocks → rattachés aux articles et aux entrepôts
 ```
 
 `warehouse` lit `f_emplacements`, **seule table du jeu source qui ne vienne pas de Sage** :
@@ -47,6 +48,7 @@ nouvelle instance.
 | `product` | `category` | les articles sont créés **sans classement**, et le rapport le signale |
 | `supplierprice` | `thirdparty`, `product` | les lignes sans article ni tiers repris sont ignorées, et le rapport les dénombre |
 | `warehouse` | — | s'arrête si `f_emplacements` ou le dépôt principal sont absents |
+| `stock` | `product`, `warehouse` | s'arrête si l'entrepôt principal est absent ; les lignes sans article repris sont ignorées et dénombrées |
 
 Les deux derniers restent tolérants. Un article sans catégorie demeure un article valide, et
 l'on peut vouloir reprendre les produits seuls ; le rapport indique alors clairement
@@ -104,11 +106,23 @@ boutique pour chacun des ~135 000 tiers.
 Chaque objet créé porte la clé de son enregistrement source dans `ref_ext`, préfixée
 « SAGE: ». C'est ce qui rend les scripts rejouables sans table de correspondance dédiée.
 
-`llx_product_fournisseur_price` fait exception : cette table n'a pas de `ref_ext`. Le
-script `supplierprice` se rabat sur `import_key`, prévue pour cela par le coeur et écrite
-par l'API `ProductFournisseurPrice`, sans requête directe. Le marqueur y désigne **la ligne
-source** (`SAGE:<cbMarq>`) et non le couple article/fournisseur : quatre articles sont
-référencés deux fois chez un même fournisseur, avec deux références et deux prix distincts.
+Deux tables font exception, faute de `ref_ext` :
+
+**`llx_product_fournisseur_price`** — le script `supplierprice` se rabat sur `import_key`,
+prévue pour cela par le coeur et écrite par l'API `ProductFournisseurPrice`, sans requête
+directe. Le marqueur y désigne **la ligne source** (`SAGE:<cbMarq>`) et non le couple
+article/fournisseur : quatre articles sont référencés deux fois chez un même fournisseur,
+avec deux références et deux prix distincts.
+
+**`llx_stock_mouvement`** — elle n'a ni `ref_ext`, ni `import_key`, ni même `entity`. Le
+script `stock` marque donc ses mouvements par **`inventorycode`**, dont la vocation dans le
+coeur est précisément de regrouper plusieurs lignes en une opération. Tous portent
+`SAGE:OUVERTURE`, ce qui donne au client une poignée concrète : filtrer dessus dans
+**Produits > Stocks > Mouvements** sort la reprise en entier.
+
+À noter que `llx_product_stock` porte bien un `import_key`, mais **aucune classe du coeur ne
+l'écrit** — il n'existe pas d'objet métier pour cette table. L'utiliser aurait imposé une
+requête directe.
 
 ## Anomalies de la source
 

@@ -243,6 +243,19 @@ abstract class AeroMigrationRunner
     /** @var callable|null Rappel de progression, reçoit ($stats, $cursor) après chaque lot */
     public $progressCallback = null;
 
+    /**
+     * Date de référence des écritures datées produites par la reprise, 0 pour l'instant
+     * du passage.
+     *
+     * La plupart des scripts n'en ont pas l'usage : les objets qu'ils créent portent la
+     * date d'origine lue dans la source. Elle sert aux écritures qui n'en ont aucune —
+     * un mouvement de stock d'ouverture, par exemple — et qu'on veut pouvoir caler sur la
+     * date de bascule convenue plutôt que sur le moment où le script a tourné.
+     *
+     * @var int Timestamp
+     */
+    public $referenceDate = 0;
+
     // ── Résultats ──────────────────────────────────────────────────────────
 
     /**
