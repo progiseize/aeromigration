@@ -185,6 +185,9 @@ class MigrationStock extends AeroMigrationRunner
     /** @var array<int,string> rowid d'entrepôt -> libellé, pour les libellés de transfert */
     protected $warehouseRefById = array();
 
+    /** @var array<string,int> Résolutions d'entrepôt déjà faites, pour ne compter qu'une fois */
+    protected $warehouseResolved = array();
+
     // ── Compteurs de rapport ───────────────────────────────────────────────
 
     /** @var int Mouvements posés */
@@ -614,6 +617,31 @@ class MigrationStock extends AeroMigrationRunner
      */
     protected function resolveWarehouse($row)
     {
+        // Mémorisé par ligne source, car la résolution tient les compteurs de ventilation :
+        // deux appels pour la même ligne — le mode simulation en fait un pour annoncer
+        // l'action et un pour la contrôler — les feraient compter double.
+        $cacheKey = trim((string) $row->AR_Ref).'|'.(int) $row->DP_NoPrincipal;
+        if (isset($this->warehouseResolved[$cacheKey])) {
+            return $this->warehouseResolved[$cacheKey];
+        }
+
+        $resolved = $this->computeWarehouse($row);
+        $this->warehouseResolved[$cacheKey] = $resolved;
+
+        return $resolved;
+    }
+
+    /**
+     * Résout l'entrepôt d'une ligne, et tient les compteurs de ventilation.
+     *
+     * Séparée de `resolveWarehouse()` pour que le cache soit le seul point d'entrée : les
+     * compteurs doivent être incrémentés une fois par ligne source, pas une fois par appel.
+     *
+     * @param stdClass $row Ligne source
+     * @return int          rowid de l'entrepôt, 0 si non résolu
+     */
+    protected function computeWarehouse($row)
+    {
         $no = (int) $row->DP_NoPrincipal;
 
         // Aucun emplacement d'origine : l'article n'a jamais été rangé.
@@ -736,7 +764,7 @@ class MigrationStock extends AeroMigrationRunner
             ? $this->stockByProduct[(int) $target['id']]
             : array();
         if (array_sum($current) != 0) {
-            return $this->relocateStock($row, $target, $current, (int) $warehouseId, $cost, $qty, $mini, $maxi);
+            return $this->relocateStock($target, $current, (int) $warehouseId, $cost, $qty, $mini, $maxi);
         }
 
         // Ligne venue pour ses seuls seuils : elle ne produit aucun mouvement, donc
@@ -801,17 +829,16 @@ class MigrationStock extends AeroMigrationRunner
      * méthode ne fait rien. C'est plus solide qu'un index, qui ne dirait pas si quelqu'un a
      * déplacé du stock à la main entre-temps.
      *
-     * @param stdClass $row         Ligne source
-     * @param array    $target      Produit cible, tel que l'index le porte
-     * @param array    $current     Stock en place : rowid d'entrepôt -> quantité
-     * @param int      $warehouseId Entrepôt de destination
-     * @param float    $cost        Coût de valorisation
-     * @param float    $sageQty     Quantité annoncée par la photo, pour le relevé d'écart
-     * @param float    $mini        Seuil d'alerte
-     * @param float    $maxi        Stock désiré
+     * @param array $target      Produit cible, tel que l'index le porte
+     * @param array $current     Stock en place : rowid d'entrepôt -> quantité
+     * @param int   $warehouseId Entrepôt de destination
+     * @param float $cost        Coût de valorisation
+     * @param float $sageQty     Quantité annoncée par la photo, pour le relevé d'écart
+     * @param float $mini        Seuil d'alerte
+     * @param float $maxi        Stock désiré
      * @return array{action:string,id:int}
      */
-    protected function relocateStock($row, array $target, array $current, $warehouseId, $cost, $sageQty, $mini, $maxi)
+    protected function relocateStock(array $target, array $current, $warehouseId, $cost, $sageQty, $mini, $maxi)
     {
         $productId = (int) $target['id'];
         $sources   = 0;
@@ -829,8 +856,8 @@ class MigrationStock extends AeroMigrationRunner
             // est positive : les types 1 et 2 ne touchent pas au coût moyen, et un mouvement
             // positif sur l'entrepôt d'origine — cas d'un stock négatif à déplacer — le
             // ferait à tort.
-            $this->transfer($productId, $sourceId, -$qty, 0, $row, $warehouseId);
-            $this->transfer($productId, $warehouseId, $qty, ($qty > 0 ? $cost : 0), $row, $warehouseId);
+            $this->transfer($productId, $sourceId, -$qty, 0, $warehouseId);
+            $this->transfer($productId, $warehouseId, $qty, ($qty > 0 ? $cost : 0), $warehouseId);
 
             // L'index suit l'écriture : sans cela, deux lignes visant le même produit
             // déplaceraient deux fois la même quantité.
@@ -868,16 +895,15 @@ class MigrationStock extends AeroMigrationRunner
      * coeur — `$op[0] = +n`, `$op[1] = -n` (product.class.php, `correct_stock()`) —, d'où le
      * type déduit du signe de la quantité.
      *
-     * @param int      $productId   Produit
-     * @param int      $warehouseId Entrepôt touché
-     * @param float    $qty         Quantité signée
-     * @param float    $price       Prix, pour le coût moyen
-     * @param stdClass $row         Ligne source, pour le libellé
-     * @param int      $targetId    Entrepôt de destination du transfert, pour le libellé
-     * @return int                  rowid du mouvement
-     * @throws Exception            Si le coeur refuse le mouvement, ou n'écrit rien
+     * @param int   $productId   Produit
+     * @param int   $warehouseId Entrepôt touché
+     * @param float $qty         Quantité signée
+     * @param float $price       Prix, pour le coût moyen
+     * @param int   $targetId    Entrepôt de destination du transfert, pour le libellé
+     * @return int               rowid du mouvement
+     * @throws Exception         Si le coeur refuse le mouvement, ou n'écrit rien
      */
-    protected function transfer($productId, $warehouseId, $qty, $price, $row, $targetId)
+    protected function transfer($productId, $warehouseId, $qty, $price, $targetId)
     {
         $movement = new MouvementStock($this->db);
         $mvid = $movement->_create(
@@ -887,7 +913,7 @@ class MigrationStock extends AeroMigrationRunner
             (float) $qty,
             ($qty > 0) ? 0 : 1,
             (float) $price,
-            $this->buildRelocationLabel($row, $targetId),
+            $this->buildRelocationLabel($targetId),
             $this->buildRefExt($this->relocationKey),
             $this->resolveDate()
         );
@@ -906,11 +932,10 @@ class MigrationStock extends AeroMigrationRunner
      * Il nomme la destination, seule information que le client n'a pas sous les yeux : la
      * colonne « Entrepôt » de la liste des mouvements donne déjà l'autre moitié.
      *
-     * @param stdClass $row      Ligne source
-     * @param int      $targetId Entrepôt de destination
+     * @param int $targetId Entrepôt de destination
      * @return string
      */
-    protected function buildRelocationLabel($row, $targetId)
+    protected function buildRelocationLabel($targetId)
     {
         $name = isset($this->warehouseRefById[(int) $targetId])
             ? $this->warehouseRefById[(int) $targetId]
@@ -1470,9 +1495,12 @@ class MigrationStock extends AeroMigrationRunner
             $block[] = $this->countLine($this->gapLines, 'article(s) dont la quantité en place'
                 .' diffère de la source, écart net '
                 .($this->gapUnits > 0 ? '+' : '').(int) $this->gapUnits.' unité(s)');
-            $block[] = '          Volontairement NON corrigés : la quantité en place vient du';
-            $block[] = '          système en service, la source d\'une copie datée. Ces écarts';
-            $block[] = '          sont des ventes et des réceptions postérieures.';
+            $block[] = '          Volontairement NON corrigés, et à arbitrer article par article';
+            $block[] = '          plutôt qu\'en masse : un gros écart relève le plus souvent d\'un';
+            $block[] = '          article que la source ne suit pas en stock — son zéro ne veut';
+            $block[] = '          pas dire « rien », mais « je ne compte pas » — ou d\'une dérive';
+            $block[] = '          de la boutique. Les petits écarts sont le décalage normal entre';
+            $block[] = '          la copie de la source et l\'état de la cible.';
 
             foreach ($this->gapSamples as $gap) {
                 $delta = $gap['current'] - $gap['sage'];

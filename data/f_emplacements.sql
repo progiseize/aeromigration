@@ -1,3 +1,12 @@
+-- Emplacements de stock de l'ancien ERP.
+--
+-- Cette table n'existe pas dans les donnees livrees : les libelles d'emplacement
+-- n'etaient nulle part, et ont ete extraits du code HTML de l'interface. Les huit
+-- emplacements de la salle 6 (605-611, 639) ont ete recuperes depuis f_depotempl,
+-- table Sage presente dans l'import integral des archives.
+--
+-- A rejouer avant « migrate.php warehouse » sur toute nouvelle instance.
+-- 1014 emplacements, dont 819 portent du stock.
 SET NAMES utf8mb4;
 DROP TABLE IF EXISTS f_emplacements;
 CREATE TABLE f_emplacements (
@@ -596,7 +605,7 @@ INSERT INTO f_emplacements (rowid, label) VALUES (589, 'S1-B6-5');
 INSERT INTO f_emplacements (rowid, label) VALUES (590, '2V MIGNOTTE SYLVAIN 22 ROUTE DE CAR');
 INSERT INTO f_emplacements (rowid, label) VALUES (591, 'S1-A11-1');
 INSERT INTO f_emplacements (rowid, label) VALUES (592, 'S3-B6-4');
-INSERT INTO f_emplacements (rowid, label) VALUES (593, 'BOUTIQUE VITRINE S?CURIS?E 1');
+INSERT INTO f_emplacements (rowid, label) VALUES (593, 'BOUTIQUE VITRINE SECURISEE 1');
 INSERT INTO f_emplacements (rowid, label) VALUES (594, 'B-VS-01');
 INSERT INTO f_emplacements (rowid, label) VALUES (595, 'TIROIR-T1');
 INSERT INTO f_emplacements (rowid, label) VALUES (596, 'S2-A3-3');
@@ -608,7 +617,14 @@ INSERT INTO f_emplacements (rowid, label) VALUES (601, 'S3-A5-5');
 INSERT INTO f_emplacements (rowid, label) VALUES (602, 'S1-A13-3');
 INSERT INTO f_emplacements (rowid, label) VALUES (603, 'S1-A14-2');
 INSERT INTO f_emplacements (rowid, label) VALUES (604, 'R14');
-INSERT INTO f_emplacements (rowid, label) VALUES (612, 'COMPL?MENT AUX CARTES A?RO');
+INSERT INTO f_emplacements (rowid, label) VALUES (605, 'S6-A2-2');
+INSERT INTO f_emplacements (rowid, label) VALUES (606, 'S6-A2-3');
+INSERT INTO f_emplacements (rowid, label) VALUES (607, 'S6-A3-3');
+INSERT INTO f_emplacements (rowid, label) VALUES (608, 'S6-A1-2');
+INSERT INTO f_emplacements (rowid, label) VALUES (609, 'S6-A4-3');
+INSERT INTO f_emplacements (rowid, label) VALUES (610, 'S6-A3-2');
+INSERT INTO f_emplacements (rowid, label) VALUES (611, 'S6-A4-2');
+INSERT INTO f_emplacements (rowid, label) VALUES (612, 'COMPLEMENT AUX CARTES AERO');
 INSERT INTO f_emplacements (rowid, label) VALUES (613, 'S1-A14-1');
 INSERT INTO f_emplacements (rowid, label) VALUES (614, 'S2-B1-1');
 INSERT INTO f_emplacements (rowid, label) VALUES (615, 'S1-B2-2');
@@ -625,7 +641,7 @@ INSERT INTO f_emplacements (rowid, label) VALUES (625, 'TIROIR DD');
 INSERT INTO f_emplacements (rowid, label) VALUES (626, 'TIROIR AA');
 INSERT INTO f_emplacements (rowid, label) VALUES (627, 'BOUTIQUE');
 INSERT INTO f_emplacements (rowid, label) VALUES (628, 'RUPTURE DEF');
-INSERT INTO f_emplacements (rowid, label) VALUES (629, 'STOCK-S?CURIS?');
+INSERT INTO f_emplacements (rowid, label) VALUES (629, 'STOCK-SECURISE');
 INSERT INTO f_emplacements (rowid, label) VALUES (630, 'STOCK-SECURISE');
 INSERT INTO f_emplacements (rowid, label) VALUES (632, 'TOURNIQUET');
 INSERT INTO f_emplacements (rowid, label) VALUES (633, 'STOCK BATTERIE RADIO');
@@ -634,6 +650,7 @@ INSERT INTO f_emplacements (rowid, label) VALUES (635, 'ETAGE DERRIERE HELICE');
 INSERT INTO f_emplacements (rowid, label) VALUES (636, 'ETAGE - COLONNE 1');
 INSERT INTO f_emplacements (rowid, label) VALUES (637, 'S2-B4-2');
 INSERT INTO f_emplacements (rowid, label) VALUES (638, 'S1-A12-2');
+INSERT INTO f_emplacements (rowid, label) VALUES (639, 'S6-A4-4');
 INSERT INTO f_emplacements (rowid, label) VALUES (640, 'T8');
 INSERT INTO f_emplacements (rowid, label) VALUES (641, 'S2-B5-2');
 INSERT INTO f_emplacements (rowid, label) VALUES (642, 'S1-A12-1');
@@ -759,7 +776,7 @@ INSERT INTO f_emplacements (rowid, label) VALUES (762, 'S3-B6-1');
 INSERT INTO f_emplacements (rowid, label) VALUES (763, 'S3-B3-1');
 INSERT INTO f_emplacements (rowid, label) VALUES (764, 'L-A2-7');
 INSERT INTO f_emplacements (rowid, label) VALUES (765, 'L-B4-1');
-INSERT INTO f_emplacements (rowid, label) VALUES (766, 'ETAG?RE 1');
+INSERT INTO f_emplacements (rowid, label) VALUES (766, 'ETAGERE 1');
 INSERT INTO f_emplacements (rowid, label) VALUES (767, 'ET.1');
 INSERT INTO f_emplacements (rowid, label) VALUES (768, 'S4-A3-5');
 INSERT INTO f_emplacements (rowid, label) VALUES (769, 'S4-A2-5');

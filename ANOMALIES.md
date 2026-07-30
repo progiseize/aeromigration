@@ -926,13 +926,41 @@ Concordance article par article :
 | en place supérieur | 376 |
 | en place inférieur | 192 |
 
-Le stock en place **est** celui de l'ancien ERP, à ceci près qu'il est plus récent : l'écart
-net de +5 135 unités correspond aux ventes et réceptions postérieures à la copie.
+Le stock en place **est** celui de l'ancien ERP. Reste à comprendre l'écart net de +5 135
+unités, et sa décomposition est instructive :
+
+| Origine de l'écart | Articles | Unités |
+|---|---:|---:|
+| articles que la source **ne suit pas en stock** | 13 | **+2 472** |
+| un seul article, `#09462` | 1 | **+2 214** |
+| tous les autres | 554 | **+449** |
+
+Les 13 premiers ne sont pas des écarts mais un malentendu de lecture : leur `AR_SuiviStock`
+valant 0, le zéro de la source ne signifie pas « il n'y a rien » mais « je ne compte pas ».
+Le garde-fou du script les écarte déjà, leur stock reste où il est. `#09462` est une dérive
+de la boutique, confirmée à l'écran de l'ancien ERP — 3 168 affichés contre 5 402 en base.
+
+Reste **449 unités sur 554 articles**, moins d'une par article : le décalage normal entre la
+copie de la source et l'injection qui a peuplé la cible.
 
 **Décision : relocaliser, jamais réajuster.** La reprise déplace le stock vers l'emplacement
 que la source connaît — seule information qui manque à la boutique — et ne touche pas aux
-quantités. Aligner sur la photo aurait effacé 5 135 unités de mouvements réels, dont des
-ventes en boutique, et contredit ce que le client voit à l'écran.
+quantités. Il n'y a pas de masse d'écarts à corriger, mais du bruit et deux cas isolés, qui
+s'arbitrent article par article après la reprise.
+
+> **Une explication séduisante et fausse, à ne pas resservir.** L'écart avait d'abord été
+> attribué aux « ventes et réceptions postérieures à la copie ». La chronologie l'interdit :
+> les mouvements qui ont peuplé la cible datent du **23 juin** et forment une injection unique
+> — 5 572 mouvements pour 5 571 produits, un seul par produit —, alors que
+> `f_artstock.cbModification` s'arrête au **26 juin**. La copie est postérieure de trois jours,
+> les écarts ne peuvent donc pas être des ventes qui l'auraient suivie.
+>
+> Une seconde vague de 520 mouvements existe bien au 15 juillet, mais elle ne concerne que des
+> produits nés dans la boutique, hors du périmètre de la reprise : 519 sur 520.
+>
+> La leçon tient en une phrase : **datez les faits avant de les expliquer.** Deux requêtes sur
+> `datem` et `cbModification` auraient évité de bâtir un raisonnement, et une décision, sur
+> une chronologie supposée.
 
 Le mécanisme est décrit en tête de `class/migrationstock.class.php`. Deux points méritent
 d'être retenus au-delà de ce projet :

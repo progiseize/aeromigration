@@ -6,6 +6,26 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.8.1] — 2026-07-30
+
+### Corrigé
+
+- **La ventilation par emplacement était comptée deux fois** dans le rapport de simulation,
+  dès lors que le produit portait déjà du stock. `resolveWarehouse()` tient les compteurs de
+  ventilation, et le mode simulation l'appelle deux fois par ligne — une fois pour annoncer
+  l'action, une fois pour la contrôler. Invisible sur une cible vierge, le défaut donnait en
+  production 11 446 lignes ventilées pour 5 938 lues.
+
+  La résolution est désormais mémorisée par ligne source : les compteurs sont incrémentés une
+  fois par ligne, quel que soit le nombre d'appels. **Les écritures n'étaient pas concernées**,
+  seul le rapport l'était.
+
+> **Ce que ce défaut apprend.** Une méthode qui résout *et* compte n'est plus idempotente, et
+> le second appel est indétectable à la lecture de l'appelant. Le compteur a été déplacé
+> derrière un cache, mais la leçon vaut pour les prochains scripts : garder la résolution pure
+> et compter à l'endroit qui décide, ou mémoriser dès qu'un effet de bord s'y attache.
+
+
 ## [0.8.0] — 2026-07-30
 
 ### Ajouté
