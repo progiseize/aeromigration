@@ -857,10 +857,22 @@ class MigrationSupplierPrice extends AeroMigrationRunner
             $this->delaySet++;
         }
 
-        // Remise : AF_TypeRem est NULL sur toute la table, rien ne garantit qu'il s'agisse
-        // d'un pourcentage plutôt que d'un montant. Les 58 lignes sont signalées au rapport
-        // pour validation. Sans conséquence sur le prix : Dolibarr n'en déduit pas
-        // l'unitprice, la remise ne joue que sur les lignes de commande fournisseur.
+        // Remise : AF_TypeRem est NULL sur toute la table, mais la nature de AF_Remise est
+        // établie — l'ancien ERP affiche « brut 39,00 · remise 30,00 · net 27,30 » sur
+        // l'article 13566, dont AF_PrixAch vaut 39 et AF_Remise 30. C'est donc bien un
+        // pourcentage, et le brut qui est stocké dans AF_PrixAch.
+        //
+        // Le modèle cible est identique : `price` reçoit le brut, `remise_percent` le taux,
+        // et le coeur applique `unitprice * (1 - remise_percent / 100)` là où le prix net
+        // compte — choix du meilleur fournisseur (fournisseur.product.class.php:1013),
+        // colonne « Prix d'achat » de la liste des produits, valorisation des nomenclatures,
+        // prix d'achat des lignes de document. La remise reste visible et modifiable dans
+        // l'onglet « Prix fournisseurs » de la fiche article, colonne « Remise quantité min ».
+        //
+        // Seules 58 lignes sur 15 962 en portent une, alors que l'ancien ERP en affiche sur
+        // d'autres (article 14240 : 17 %, AF_Remise NULL dans l'export). Voir ANOMALIES.md,
+        // F8 : les données livrées sont lacunaires sur cette colonne, sans que rien ne
+        // permette de reconstituer les taux manquants.
         $remise = 0;
         if (!empty($row->AF_Remise) && (float) $row->AF_Remise > 0) {
             $remise = (float) $row->AF_Remise;

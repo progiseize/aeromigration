@@ -116,9 +116,35 @@ avec deux références et deux prix distincts.
 
 **`llx_stock_mouvement`** — elle n'a ni `ref_ext`, ni `import_key`, ni même `entity`. Le
 script `stock` marque donc ses mouvements par **`inventorycode`**, dont la vocation dans le
-coeur est précisément de regrouper plusieurs lignes en une opération. Tous portent
-`SAGE:OUVERTURE`, ce qui donne au client une poignée concrète : filtrer dessus dans
-**Produits > Stocks > Mouvements** sort la reprise en entier.
+coeur est précisément de regrouper plusieurs lignes en une opération. Ils portent
+`SAGE:OUVERTURE` ou `SAGE:RELOCALISATION` selon le régime (voir ci-dessous), ce qui donne au
+client une poignée concrète : filtrer dessus dans **Produits > Stocks > Mouvements** sort la
+reprise en entier.
+
+## Le stock, quand la cible n'est pas vierge
+
+`stock` choisit son régime **ligne par ligne**, en regardant si le produit porte déjà du
+stock :
+
+| État du produit | Ce qui est écrit | Code d'inventaire |
+|---|---|---|
+| aucun stock | mouvement d'ouverture, à la quantité de la source | `SAGE:OUVERTURE` |
+| du stock en place | transfert vers l'emplacement de la source | `SAGE:RELOCALISATION` |
+
+C'est le cas en production : PrestaShop tient son stock de l'ancien ERP et Prestasync l'avait
+déjà poussé dans Dolibarr, tout entier dans l'entrepôt principal. Poser la photo par-dessus
+aurait doublé le stock.
+
+**Les quantités ne sont jamais modifiées dans le second régime.** Ce qui est en place vient du
+système en service ; la source est une copie datée. Les écarts sont dénombrés au rapport, sans
+être corrigés — décision documentée dans [ANOMALIES.md](ANOMALIES.md), S11.
+
+Ce choix est fait sur l'état réel du produit et non par une option de ligne de commande :
+**un lancement de trop ne double rien**, quel que soit l'état de la cible.
+
+À noter, parce que l'intuition dit le contraire : **antidater les mouvements ne protège pas
+du doublon.** `MouvementStock::_create()` fait un `reel = reel + qty` sans trier par date. La
+date ne sert qu'à l'écran « Stock à une date » et à la lisibilité de l'historique.
 
 À noter que `llx_product_stock` porte bien un `import_key`, mais **aucune classe du coeur ne
 l'écrit** — il n'existe pas d'objet métier pour cette table. L'utiliser aurait imposé une
@@ -129,6 +155,14 @@ requête directe.
 Les problèmes de qualité rencontrés dans les données de l'ancien ERP, les décisions
 prises et ce qui reste à arbitrer sont consignés dans [ANOMALIES.md](ANOMALIES.md).
 Ce fichier se complète au fur et à mesure de l'écriture des scripts.
+
+## Documents commerciaux
+
+Les quatre tables de documents — devis, commandes, factures, réceptions — ne sont **pas
+reprises** à ce jour. Leur analyse préalable est dans [DOCUMENTS.md](DOCUMENTS.md) :
+nomenclature des types, colonnes exploitables, volumétrie, correspondance possible avec les
+objets Dolibarr, et les trois limites qui décideront du périmètre — au premier rang
+desquelles l'absence totale de règlements enregistrés.
 
 ## Arborescence
 

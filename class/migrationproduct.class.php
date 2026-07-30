@@ -780,14 +780,26 @@ class MigrationProduct extends AeroMigrationRunner
         // 10514 est à 35,26 € pour un achat à 75,92 €. Le coût standard, lui, suit : il
         // égale exactement le prix d'achat sur 11 836 articles.
         //
-        // La preuve tient dans la marge : rapporté au prix de vente, le prix d'achat donne
-        // un coefficient moyen de 1,84, quand le prix de revient en donne un de plusieurs
-        // millions. Un coût sous-évalué gonfle la marge affichée par Dolibarr, qui s'appuie
-        // sur ce champ.
+        // Trois mesures départagent les deux colonnes :
         //
-        // Le coût standard est aussi le plus propre des deux : 14 906 valeurs exploitables
-        // contre 13 152, et aucune valeur aberrante contre 1 628 sous le centime. Le prix
-        // de revient ne sert donc que de repli, pour les 14 articles sans coût standard.
+        // - propreté : 14 906 valeurs exploitables contre 13 152, et aucune sous le centime
+        //   contre 1 628 — jusqu'à 0,000001 € pour un article à 4,19 € ;
+        // - cohérence avec le prix payé : le coût descend sous le prix d'achat net 1 097 fois
+        //   pour le coût standard, 1 379 fois pour le prix de revient, qui tombe de surcroît
+        //   à la moitié exacte du prix payé sur des dizaines d'articles ;
+        // - prise en compte de la remise, la seule mesure contrôlable à l'écran de l'ancien
+        //   ERP : sur les 53 articles à remise connue, le coût standard reproduit le prix
+        //   d'achat NET 15 fois contre 11. L'article 13566 est exemplaire — achat brut 39,00,
+        //   remise 30 %, net 27,30, et AR_CoutStd vaut 27,30 au centime.
+        //
+        // Un coût sous-évalué gonfle la marge affichée par Dolibarr, qui s'appuie sur ce
+        // champ. Le prix de revient ne sert donc que de repli, pour les 14 articles sans
+        // coût standard exploitable ; 837 articles n'ont ni l'un ni l'autre.
+        //
+        // À ne PAS reprendre comme argument : le coefficient prix de vente / coût, qui donne
+        // « plusieurs millions » pour AR_PrixRU. Le chiffre est exact mais n'est que l'effet
+        // des divisions par les 1 628 valeurs microscopiques ; hors celles-ci, les deux
+        // colonnes donnent 1,93 et 2,00. Voir ANOMALIES.md, A7.
         $cost = (float) $row->AR_CoutStd;
         if ($cost < 0.01) {
             $cost = (float) $row->AR_PrixRU;

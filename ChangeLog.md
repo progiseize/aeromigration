@@ -6,6 +6,92 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.8.0] — 2026-07-30
+
+### Ajouté
+
+- **La reprise du stock sait désormais que la cible n'est pas toujours vierge.** Sur
+  l'instance de production, PrestaShop tient son stock de l'ancien ERP et Prestasync l'avait
+  déjà poussé dans Dolibarr : **5 559 articles repris y portaient 172 965 unités**, contre
+  167 830 dans la photo — 96,4 % de concordance exacte. Le stock *est* celui de l'ancien ERP,
+  simplement plus récent, et tout entier dans un seul entrepôt faute d'emplacement connu de
+  la boutique. Poser la photo par-dessus l'aurait doublé.
+
+  Le script choisit maintenant son régime **ligne par ligne** :
+
+  | État du produit | Ce qui est écrit | Code d'inventaire |
+  |---|---|---|
+  | aucun stock | mouvement d'ouverture | `SAGE:OUVERTURE` |
+  | du stock en place | transfert vers son emplacement | `SAGE:RELOCALISATION` |
+
+  Ligne par ligne et non par une option de ligne de commande : c'est ce qui garantit qu'un
+  lancement de trop ne double rien, quel que soit l'état de la cible. L'idempotence ne repose
+  sur aucun marqueur mais sur la condition elle-même — au passage suivant il n'y a plus rien
+  hors de l'emplacement de destination. Plus solide qu'un index, qui ne dirait pas si
+  quelqu'un a déplacé du stock à la main entre-temps.
+
+  **Les quantités ne sont jamais modifiées.** La quantité en place vient du système en
+  service, la photo d'une copie datée : les écarts sont des ventes et des réceptions
+  postérieures. Le rapport les dénombre, donne l'écart net et cite les dix plus gros, sans
+  rien corriger.
+
+  Un transfert est une **paire** de mouvements de types 0 et 1, comme le fait l'écran natif
+  de déplacement en masse (`massstockmove.php:230`) : un déplacement entre entrepôts n'est ni
+  une entrée ni une sortie de l'entreprise, et les types 3 et 2 y donneraient un contresens
+  comptable.
+
+  **Le stock est valorisé au passage.** Les mouvements de Prestasync portant un prix nul, le
+  coût moyen était resté à zéro ; le prix de revient est posé sur l'entrée dans la
+  destination, et `_create()` prend `$newpmp = $price` dès lors que l'ancien coût moyen est
+  nul (`mouvementstock.class.php:588`). Vérifié : le coût moyen égale le coût de revient sur
+  les cinq articles du jeu d'essai.
+
+  La purge défait les deux régimes. Elle parcourt les mouvements dans l'ordre inverse de leur
+  écriture — la seconde moitié d'un transfert doit être annulée avant la première — et
+  contre-passe chaque type par son symétrique dans sa propre famille (0↔1, 2↔3). Vérifié : le
+  stock revient dans son entrepôt d'origine, à la quantité d'origine.
+
+### Corrigé
+
+- **La valorisation du stock ignorait le repli sur le prix de revient.** Le script `stock`
+  ne lisait que `AR_CoutStd`, là où `product` retient le coût standard puis `AR_PrixRU` en
+  dessous du centime. Vingt-et-une lignes de stock n'ont pas de coût standard mais un prix de
+  revient exploitable : **93 unités et 14 443,92 €** entraient avec un coût moyen nul, quand
+  la fiche article, elle, affichait bien un coût de revient. Les deux écrans se
+  contredisaient.
+
+  Les deux scripts appliquent désormais la même règle. Le rapport distingue les lignes
+  valorisées par le repli de celles qu'aucune des deux colonnes ne couvre — 104 lignes,
+  812 unités, qui restent sans prix.
+
+### Vérifié
+
+- **Le choix du coût standard comme coût de revient est confirmé**, et par un contrôle qui
+  manquait : la lecture d'écran de l'ancien ERP. L'article 13566 y affiche un prix d'achat
+  brut de 39,00, une remise de 30 % et un net de 27,30 — et `AR_CoutStd` vaut exactement
+  27,30. Sur les 53 articles dont la remise est connue, le coût standard reproduit le prix
+  net 15 fois contre 11 pour le prix de revient.
+
+  Contrôle de conformité sur les 15 811 produits repris : 14 906 `cost_price` égalent
+  `AR_CoutStd`, 14 égalent `AR_PrixRU` par le repli, et **aucun** n'a de valeur inexpliquée.
+
+  Un argument avancé jusqu'ici est en revanche retiré : le coefficient prix de vente / coût
+  « de plusieurs millions » pour `AR_PrixRU` n'était que l'effet des divisions par ses 1 628
+  valeurs sous le centime. Hors celles-ci, les deux colonnes donnent 1,93 et 2,00. La
+  décision tient aux trois autres mesures, consignées dans ANOMALIES.md A7.
+
+- **`AF_Remise` est bien un pourcentage appliqué à `AF_PrixAch`**, ce dont `AF_TypeRem`, NULL
+  sur toute la table, ne disait rien. Le script `supplierprice` le reprenait déjà correctement
+  dans `remise_percent`, que le coeur exploite pour le choix du meilleur fournisseur et le
+  prix d'achat des lignes de document.
+
+  Reste ouvert, et hors de portée du module : la source ne porte que **58 remises sur 15 962
+  lignes**, alors que l'ancien ERP en affiche sur d'autres — 17 % sur l'article 14240, dont
+  `AF_Remise` est NULL. Aucune autre table livrée ne contient de barème, et l'export CSV
+  mélange prix bruts et nets sans règle discernable. Un export complémentaire est à demander,
+  voir ANOMALIES.md F8.
+
+
 ## [0.7.3] — 2026-07-29
 
 ### Corrigé

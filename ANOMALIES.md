@@ -227,20 +227,52 @@ Sur les 13 814 articles ayant un fournisseur principal tarifé, **2 767 (20 %) p
 prix de revient inférieur à leur propre prix d'achat**. Le coût standard, lui, suit : il
 égale exactement le prix d'achat sur 11 836 articles (86 %).
 
-La preuve tient dans la marge, mesurée sur ces 2 767 articles :
+Trois mesures départagent les deux colonnes.
 
-| Coût retenu | Coefficient moyen prix de vente / coût |
-|---|---|
-| Prix d'achat fournisseur | **1,84** — une marge commerciale plausible |
-| `AR_PrixRU` | 14 489 208 — absurde |
+**Propreté.** Le coût standard porte **14 906 valeurs exploitables contre 13 152**, et
+**aucune sous le centime contre 1 628** — jusqu'à `0,000001 €` pour un article à `4,19 €`.
 
-Le coût standard est aussi le plus propre des deux : **14 906 valeurs exploitables contre
-13 152**, et **aucune sous le centime contre 1 628**. Les 1 628 valeurs aberrantes du prix
-de revient — jusqu'à `0,000001 €` pour un article à `4,19 €` — disparaissent d'elles-mêmes
-du calcul.
+**Cohérence avec le prix payé.** Sur les 13 814 articles ayant un fournisseur principal
+tarifé, le coût descend sous le prix d'achat net **1 097 fois pour le coût standard, 1 379
+fois pour le prix de revient**. Et l'écart y est autrement plus violent : le prix de revient
+tombe régulièrement à la moitié exacte du prix payé, motif qu'on ne rencontre pas sur le coût
+standard.
+
+```
+    51                          revient 141,35   coût standard 295,00   achat 295,00
+  9309                          revient 132,00   coût standard 264,01   achat 264,01
+  8598                          revient 128,57   coût standard 259,14   achat 259,14
+```
+
+**Prise en compte de la remise.** C'est la mesure la plus parlante, et la seule qui se
+contrôle à l'écran de l'ancien ERP. Sur les 53 articles dont la remise fournisseur est connue
+(voir F7), le coût standard reproduit le prix d'achat **net** 15 fois, le prix de revient 11
+fois. L'article 13566 en donne l'illustration exacte :
+
+```
+13566  Thomas Pesquet     achat brut 39,00   remise 30 %   net 27,30
+                           coût standard 27,30   ← le net, au centime
+```
+
+> Une mise en garde sur un argument qu'il ne faut pas reprendre : mesuré sur les 2 767
+> articles au prix de revient périmé, le coefficient prix de vente / coût donnait
+> « 14 489 208 » pour `AR_PrixRU` contre 1,84 pour le prix d'achat. Le chiffre est exact mais
+> ne prouve rien — il n'est que l'effet des divisions par les 1 628 valeurs microscopiques.
+> Hors ces valeurs, les deux colonnes donnent des coefficients moyens comparables, **1,93
+> pour le coût standard et 2,00 pour le prix de revient**, et des marges négatives en nombre
+> voisin (197 contre 207). La décision repose sur les trois mesures ci-dessus, pas sur
+> celle-là.
 
 Le prix de revient sert de repli pour les **14 articles** sans coût standard exploitable.
 **837 articles** n'ont de valeur dans aucune des deux colonnes et restent sans coût.
+
+**Conformité de la reprise, contrôlée sur les 15 811 produits :**
+
+| `llx_product.cost_price` | Produits |
+|---|---:|
+| égal à `AR_CoutStd` | 14 906 |
+| égal à `AR_PrixRU` (le repli) | 14 |
+| **sans origine identifiable** | **0** |
 
 **Ce qui n'est pas corrigé** : 1 318 articles gardent un coût standard lui aussi inférieur
 à leur prix d'achat. Forcer la valeur au prix d'achat aurait été possible, mais c'eût été
@@ -383,8 +415,11 @@ effet de bord d'une reprise de prix d'achat.
 | F4 | Prix d'achat absent ou nul | 1 512 | Ligne créée, tarif à zéro |
 | F5 | Clés inexploitables (`CT_Num` vide ou inconnu, `AR_Ref` orphelin) | 12 | Écartées et listées |
 | F6 | `AF_QteMini` et `AF_Colisage` font double emploi | 15 962 | Une seule reprise |
-| F7 | `AF_Remise` sans `AF_TypeRem` | 58 | Repris en pourcentage, à valider |
-| F8 | Tabulations dans les références | 6 | Nettoyées |
+| F7 | `AF_Remise` est bien un pourcentage | 58 | Repris dans `remise_percent`, vérifié à l'écran |
+| F8 | **Remise absente là où l'ancien ERP en affiche une** | 12 347 | **Ouvert** — export complémentaire à demander |
+| F9 | Tabulations dans les références | 6 | Nettoyées |
+| F10 | Colonnes sans emploi | 15 962 | Non reprises |
+| F11 | `AR_PrixAch` et `AF_PrixAch` divergent | 8 263 | Deux notions distinctes, seul le tarif est repris |
 
 ### F1. Une référence fournisseur pour plusieurs articles
 
@@ -482,17 +517,90 @@ Reprise dans `packaging`, mais **`PRODUCT_USE_SUPPLIER_PACKAGING` n'est pas acti
 reprise : cette constante modifie l'arrondi des quantités d'achat pour toute l'instance,
 c'est un arbitrage du client. La donnée est stockée, elle s'activera le jour voulu.
 
-### F7. `AF_Remise` sans `AF_TypeRem`
+### F7. `AF_Remise` est bien un pourcentage — vérifié dans l'ancien ERP
 
-58 lignes portent une remise, valeurs de 2 à 33,5 — cohérentes avec des pourcentages. Mais
-**`AF_TypeRem` est NULL sur les 15 962 lignes** : rien ne prouve qu'il s'agisse d'un taux
-plutôt que d'un montant.
+58 lignes portent une remise, valeurs de 2 à 33,5. **`AF_TypeRem` étant NULL sur les 15 962
+lignes**, rien dans les données ne disait s'il s'agissait d'un taux ou d'un montant. La
+question est tranchée par lecture d'écran sur l'article **13566** :
 
-Repris en pourcentage, et listé au rapport pour validation client. Le risque est borné :
-Dolibarr n'en déduit pas le prix unitaire, la remise ne joue que sur les lignes de commande
-fournisseur.
+| Ancien ERP | Valeur | Source |
+|---|---:|---|
+| Prix achat brut | 39,00 | `AF_PrixAch` = 39,00 |
+| Remise | 30,00 | `AF_Remise` = 30,00 |
+| Prix achat net | 27,30 | 39,00 × (1 − 30/100) |
 
-### F8. Tabulations dans les références
+**`AF_PrixAch` porte le brut, `AF_Remise` le taux, le net est calculé.** Le modèle cible est
+le même : `price` reçoit le brut, `remise_percent` le taux, et le coeur applique
+`unitprice × (1 − remise_percent / 100)` partout où le prix net compte — choix du meilleur
+fournisseur (`fournisseur.product.class.php:1013`), colonne « Prix d'achat » de la liste des
+produits, valorisation des nomenclatures, prix d'achat des lignes de document. Le taux reste
+visible et modifiable dans l'onglet **Prix fournisseurs** de la fiche article, colonne
+« Remise quantité min ».
+
+Le cas 13566 est reproduit à l'identique en cible : `price` 39,00 · `remise_percent` 30.
+
+### F8. La remise manque sur la quasi-totalité des lignes, et rien ne la reconstitue
+
+C'est **la seule anomalie de tarif fournisseur qui reste ouverte**, et elle ne se règle pas
+côté reprise.
+
+| `AF_Remise` | Lignes |
+|---|---:|
+| NULL | 12 347 |
+| 0 | 3 557 |
+| > 0 | **58** |
+
+Or l'ancien ERP affiche des remises sur des lignes dont `AF_Remise` est NULL. Contrôle sur
+l'article **14240** (F295, Garmin) : l'écran donne brut 1 576,19 · remise **17 %** · net
+1 308,24 — et 1 576,19 × 0,83 = 1 308,24, la mécanique de F7 exactement. Mais `AF_Remise` y
+est **NULL**, et `cbModification` date du 18/09/2024 : la ligne n'a pas bougé depuis.
+
+Quatre pistes de reconstitution, toutes épuisées :
+
+1. **Autre colonne de `f_artfourniss`** — `AF_TypeRem`, `AF_Garantie`, `AF_Conversion` sont
+   NULL à 100 %. `AF_RemiseNouv` et `AF_DateApplication` aussi. Rien.
+2. **`f_artfournissgamme`** (tarifs par gamme, 688 lignes / 137 articles) — aucune ligne
+   pour 14240, et 9 remises seulement sur l'ensemble.
+3. **Barème de remise dans une autre table source** — recherche sur toutes les colonnes
+   contenant « Remise » dans les 33 tables : hors `f_artfourniss` et `f_artfournissgamme`,
+   elles n'apparaissent que dans `f_docligne` (remises de ligne de document, historique).
+   Les 13 tables supplémentaires de l'import intégral des ZIP n'en contiennent aucune.
+4. **Export CSV `expart.csv`** — inexploitable, voir ci-dessous.
+
+**Pourquoi le CSV ne sauve pas la situation.** Sa colonne `AF_PrixAch` a été confrontée aux
+44 lignes dont la remise est connue :
+
+| Ce que porte le CSV | Lignes |
+|---|---:|
+| le prix **net** (brut − remise) | 14 |
+| le prix **brut** | 13 |
+| ni l'un ni l'autre | 17 |
+
+Le fichier mélange donc trois choses, et les 17 valeurs inclassables s'expliquent par des
+prix qui ont bougé entre l'export et la copie de base — 13463 par exemple : CSV 6,2662, soit
+6,60 remisé de 5 %, quand le brut vaut aujourd'hui 6,80. **Aucune règle ne permet de savoir
+si une valeur du CSV est brute ou nette.** Il est écarté.
+
+**Un cas achève de disqualifier la source.** Article **13631** : `AF_PrixAch` = 1,92 dans la
+base, `cbModification` au 18/12/2022 — mais l'ancien ERP affiche **13,24** en prix d'achat
+brut, remise 0, comme le CSV. Ce n'est plus une remise absente, c'est un **prix faux** dans
+la copie livrée.
+
+**Conséquence pour la reprise.** Le brut est repris tel quel, la remise quand elle existe.
+Sur les 12 347 lignes sans remise, le prix d'achat en cible est donc **au mieux exact, au
+pire surévalué du taux de remise**. Il n'y a pas de correctif possible sans une donnée que
+nous n'avons pas.
+
+**Ce qu'il faut demander à l'éditeur de l'ancien ERP** — au choix, l'un suffit :
+
+- un export de `F_ARTFOURNISS` avec `AF_Remise` **et** `AF_TypeRem` réellement peuplées ;
+- ou, plus simple à obtenir, un export à deux colonnes `AR_Ref` / **prix d'achat net**, tel
+  qu'affiché à l'écran, daté du jour de la bascule.
+
+Le second est préférable : il court-circuite la question du barème et se contrôle article par
+article sur trois écrans.
+
+### F9. Tabulations dans les références
 
 Six références portent une tabulation en tête ou en fin — `\t9782373011173`, `52641\t` —,
 et huit autres des espaces de bord.
@@ -503,7 +611,7 @@ agrégation SQL n'aurait donc pas coïncidé avec les clés calculées à l'exé
 lignes seraient passées à travers la détection. Le nettoyage est fait par une fonction PHP
 unique, autorité sur la forme d'une référence en préparation comme à l'écriture.
 
-### F9. Colonnes sans emploi
+### F10. Colonnes sans emploi
 
 `AF_TypeRem`, `AF_Garantie` et `EG_Champ` sont NULL sur les 15 962 lignes. `AF_Unite` ne
 vaut `1` que sur 710 lignes, `AF_Conversion` et `AF_ConvDiv` sont entièrement nulles.
@@ -511,17 +619,46 @@ vaut `1` que sur 710 lignes, `AF_Conversion` et `AF_ConvDiv` sont entièrement n
 `AF_CodeBarre` 4 fois. Les colonnes de tarif futur (`AF_PrixAchNouv`, `AF_RemiseNouv`,
 `AF_DateApplication`) ne sont pas reprises : Dolibarr n'a pas de notion équivalente.
 
+### F11. Deux prix d'achat qui ne parlent pas de la même chose
+
+`f_article` porte son propre `AR_PrixAch`, distinct de l'`AF_PrixAch` du fournisseur
+principal. Sur les 14 929 couples concernés :
+
+| | Couples |
+|---|---:|
+| valeurs identiques | 6 564 |
+| prix de l'article supérieur | 4 238 |
+| prix de l'article inférieur | 4 025 |
+
+Ce n'est donc pas une redondance mais **deux notions** : `AF_PrixAch` est le tarif négocié,
+`AR_PrixAch` un prix constaté au niveau de l'article. Le CSV `expart.csv` tranche dans le même
+sens — sur les 8 251 couples divergents, sa colonne suit `AF_PrixAch` **7 184 fois** contre
+1 134 pour `AR_PrixAch` : c'est bien le tarif fournisseur qu'il exporte.
+
+Aucun des deux n'est repris tel quel dans `cost_price` : le tarif va dans
+`llx_product_fournisseur_price` (script `supplierprice`), le coût de revient vient de
+`AR_CoutStd` (A7).
+
+**Un point de vigilance en découle.** L'écran de l'ancien ERP peut afficher, dans son bloc
+fournisseur, une valeur qui n'est ni l'une ni l'autre. Article 13631 : l'écran donne 13,24,
+`AR_PrixAch` vaut 13,24, mais `AF_PrixAch` vaut **1,92**. Ce n'est pas un défaut de notre
+copie — les deux imports indépendants (celui de la base de travail et l'import intégral des
+archives) donnent la même valeur, au centime et à la seconde de `cbModification` près. La
+source livrée est simplement en désaccord avec ce que l'application affiche, ce qui rejoint la
+conclusion de F8 : **ce dont nous avons besoin doit venir d'un export produit par
+l'application, pas d'une copie de ses tables.**
+
 ---
 
 ## Emplacements de stock (`f_emplacements`)
 
 | # | Anomalie | Volume | Décision |
 |---|---|---:|---|
-| E1 | Libellés absents de la source | 819 numéros | Extraits du HTML de l'ancien ERP |
+| E1 | Libellés absents de la source | 819 numéros | Extraits du HTML, complétés par `F_DEPOTEMPL` |
 | E2 | Un même libellé pour plusieurs emplacements | 70 libellés | Fusionnés |
 | E3 | Emplacements sans libellé | 3 occupés | Nommés d'après leur numéro |
 | E4 | Libellés fantaisistes | 6 | Repris tels quels |
-| E5 | Emplacements supprimés dans l'ancien ERP | 8 (114 articles) | Entrepôt de repli « À localiser » |
+| E5 | La salle 6 manquait à l'extraction | 8 (114 articles) | Récupérée, couverture désormais totale |
 | E7 | Un seul emplacement par article dans la source | 27 670 lignes | Sans objet : Dolibarr en autorise autant qu'on veut |
 
 ### E1. Les libellés n'étaient nulle part dans les données
@@ -534,10 +671,18 @@ prometteur par son nom.
 
 L'export CSV de l'ancien ERP donne les libellés mais **pas les identifiants**. Ceux-ci ont
 finalement été trouvés dans le **code HTML de l'interface**, portés par l'attribut
-`data-dp-no` des cases à cocher. D'où la table `f_emplacements` (1 006 lignes), seule table
-de ce jeu qui ne vienne pas de Sage, livrée avec son script dans `data/f_emplacements.sql`.
+`data-dp-no` des cases à cocher. D'où la table `f_emplacements`, seule table de ce jeu qui ne
+vienne pas de Sage, livrée avec son script dans `data/f_emplacements.sql`.
 
-Couverture : **810 des 819 numéros utilisés (98,9 %)**.
+`F_DEPOTEMPL` a fini par réapparaître dans l'import intégral des archives, et a complété
+l'extraction des huit emplacements de la salle 6 (E5). La table en compte désormais **1 014**,
+pour une couverture de **819 numéros utilisés sur 819**.
+
+Ses libellés n'ont en revanche pas remplacé les nôtres, car ils sont de moindre qualité : les
+accents y sont perdus au profit du caractère `?` — `BOUTIQUE VITRINE S?CURIS?E 1`, vérifié en
+hexadécimal — et plusieurs libellés portent des tabulations de tête. Le fichier livré est donc
+un composite, et il fait autorité : il est régénéré depuis la base, pour que les deux ne
+puissent pas diverger.
 
 > **Piège évité.** Faute d'identifiant dans le CSV, un alignement par position avait été
 > envisagé — le fichier n'étant pas trié alphabétiquement, il suivait vraisemblablement
@@ -572,45 +717,50 @@ Quatre d'entre eux sont effectivement occupés.
 **Décision : repris tels quels.** Ce sont de vraies saisies, au client de les corriger en
 connaissance de cause.
 
-### E5. Emplacements supprimés dans l'ancien ERP
+### E5. Huit emplacements manquaient à l'extraction — c'était la salle 6
 
-Huit numéros encore portés par des articles sont absents de l'extraction : **605 à 611, et
-639**, pour 114 articles.
+Huit numéros encore portés par des articles étaient absents de l'extraction HTML : **605 à
+611, et 639**, pour 114 articles et 161 unités.
 
-**Ce ne sont pas des trous d'extraction.** Leurs voisins immédiats sont bien présents —
-604 `R14`, 612 `COMPLEMENT AUX CARTES AERO`, 638 `S1-A12-2`, 640 `T8`. Il ne s'agit donc
-pas d'une page manquée à la copie mais de **trous dans la séquence** : ces emplacements ont
-été supprimés dans l'ancien ERP sans que leur contenu soit réaffecté. Le numéro 631 manque
-également, simplement plus aucun article ne le référence.
+`F_DEPOTEMPL`, retrouvée depuis dans l'import intégral des archives, les nomme sans
+ambiguïté :
 
-L'impact réel est faible : sur les 114 articles, **99 ont un stock à zéro**. Seuls **15
-portent réellement du stock**, pour 161 unités, dont une ligne à −12.
+| Numéro | `DP_Intitule` | Articles | Quantité |
+|---:|---|---:|---:|
+| 605 | `S6-A2-2` | 23 | 29 |
+| 606 | `S6-A2-3` | 10 | 0 |
+| 607 | `S6-A3-3` | 12 | 8 |
+| 608 | `S6-A1-2` | 6 | 48 |
+| 609 | `S6-A4-3` | 20 | 30 |
+| 610 | `S6-A3-2` | 13 | −12 |
+| 611 | `S6-A4-2` | 22 | 36 |
+| 639 | `S6-A4-4` | 8 | 22 |
 
-| Numéro | Articles | Avec du stock | Quantité |
-|---:|---:|---:|---:|
-| 605 | 23 | 5 | 29 |
-| 606 | 10 | 0 | 0 |
-| 607 | 12 | 2 | 8 |
-| 608 | 6 | 1 | 48 |
-| 609 | 20 | 3 | 30 |
-| 610 | 13 | 1 | −12 |
-| 611 | 22 | 2 | 36 |
-| 639 | 8 | 1 | 22 |
+**C'est la salle 6 en entier**, et le seul étage du magasin que la copie de l'interface avait
+manqué. Les huit numéros sont désormais dans `f_emplacements`, qui en compte **1 014**, et les
+114 lignes de stock rejoignent leurs vrais emplacements au lieu de l'entrepôt de repli.
 
-**Décision : un entrepôt de repli « À localiser »**, créé sous l'entrepôt principal et
-marqué `SAGE:ORPHELIN`. Les regrouper là plutôt que de les mêler à l'entrepôt principal les
-rend identifiables d'un coup d'oeil — c'est tout l'intérêt, leur localisation physique étant
-à retrouver.
+> **Une conclusion erronée, et pourquoi elle l'était.** Ces huit numéros avaient d'abord été
+> déclarés *supprimés dans l'ancien ERP*, au motif que leurs voisins immédiats étaient
+> présents — 604 `R14`, 612 `COMPLEMENT AUX CARTES AERO`, 638, 640 — donc qu'il ne pouvait pas
+> s'agir d'une page manquée. Le raisonnement était séduisant et faux : les numéros
+> d'emplacement ne suivent aucun ordre géographique, `604` et `612` ne sont pas voisins de
+> rayon. La contiguïté des numéros ne prouvait rien sur la contiguïté à l'écran.
+>
+> Une absence dans une extraction ne doit pas être interprétée à partir de la donnée
+> extraite : ce n'était pas un trou dans les données, c'était un trou dans notre copie.
 
-Le libellé est une consigne et non un constat, et son accent initial le fait remonter en
-tête des sélecteurs d'entrepôt : il restera visible tant que le rangement n'aura pas été
-fait. Sa description porte la liste des numéros concernés.
+**L'entrepôt de repli « À localiser » reste en place**, créé sous l'entrepôt principal et
+marqué `SAGE:ORPHELIN`. Il n'a plus de contenu attendu, mais il demeure la destination de
+toute ligne dont l'emplacement ne serait pas résolu — ce qui vaut mieux qu'un mouvement
+refusé, et se voit d'un coup d'oeil. Le libellé est une consigne et non un constat, et son
+accent initial le fait remonter en tête des sélecteurs d'entrepôt.
 
 À ne pas confondre avec deux situations voisines, volontairement traitées ailleurs : les
 trois emplacements **sans libellé** (E3), qui existent toujours dans l'ancien ERP et
 redeviendront exploitables si quelqu'un les y nomme ; et les quelque 2 000 lignes **sans
 aucun emplacement** (E6), qui vont dans l'entrepôt principal — un article jamais rangé n'est
-pas une anomalie de données, et les mêler noierait les 15 vrais cas.
+pas une anomalie de données.
 
 ### E6. Un tiers du stock n'a aucun emplacement
 
@@ -649,6 +799,9 @@ transferts de stock, au fil du rangement réel.
 | S6 | Lignes sans stock mais avec seuil | 236 | Reprises pour leurs seuils |
 | S7 | Seuils d'alerte négatifs | 2 | Ramenés à zéro |
 | S8 | Articles porteurs de stock devenus services | 3 (−14) | Écartés et signalés |
+| S9 | `DL_MvtStock` vide, l'historique n'est pas marqué | 1 039 279 lignes | Historique non repris |
+| S10 | Lignes sans coût standard pour la valorisation | 21 + 104 | Prix de revient en repli, puis sans prix |
+| S11 | **En production, le stock était déjà posé par la boutique** | 5 559 articles | Relocalisé, quantités inchangées |
 
 ### S1. Un seul dépôt réel
 
@@ -685,7 +838,7 @@ Malgré son nom, la colonne porte une valeur **unitaire** : sur les 1 755 lignes
 1 555 égalent `AS_CoutStd` et 1 297 `AS_PrixRU`, contre **53 seulement** pour
 `quantité × prix`. Elle n'est d'ailleurs remplie que sur 6 % des lignes, dont 429 à stock nul.
 
-**Décision : ignorée.** La valorisation se calcule.
+**Décision : ignorée.** La valorisation se calcule — voir S10 pour la règle retenue.
 
 ### S5. `AS_QteDispo` est un cache
 
@@ -752,97 +905,89 @@ dans l'ancien ERP. La formule est consignée ici si le besoin se présentait —
 alors compter environ 581 000 mouvements et nettoyer au préalable les dates d'inventaire
 aberrantes : 519 à `0000-00-00`, 109 en année **9202**, 2 en 2027.
 
----
+### S11. En production, le stock était déjà là — posé par la boutique
 
-## Documents commerciaux (`f_doc*`) — analyse préalable, non repris
+Constat fait sur l'instance en ligne avant toute reprise de stock :
 
-Relevé du 29/07/2026, avant toute décision de reprise. Quatre tables :
-`f_docentete_global` (318 030), `f_docligne_global` (1 039 279),
-`f_docexpedition_global` (61 156) et `f_docligne` (243).
+| Produits porteurs de stock | Produits | Unités |
+|---|---:|---:|
+| repris de l'ancien ERP (`ref_ext` en `SAGE:`) | 5 559 | **172 965** |
+| nés dans la boutique, hors reprise | 536 | 5 012 |
 
-### D1. Ce que contiennent les documents
+Or la photo n'annonce que 167 830 unités. **PrestaShop tient son stock de l'ancien ERP**, et
+Prestasync l'avait déjà poussé dans Dolibarr — tout entier dans l'entrepôt principal, la
+boutique n'ayant aucune notion d'emplacement.
 
-Les documents sont typés par le couple `DO_Domaine` / `DO_Type` :
+Concordance article par article :
 
-| Domaine | Type | Document | Volume | Période |
-|---|---|---|---:|---|
-| 0 | 0 | Devis | 1 433 | 2019-2026 |
-| 0 | 1 | Commande client | 60 936 | 2019-2026 |
-| 0 | 2 | Préparation de livraison | 61 377 | 2019-2026 |
-| 0 | 3 | Bon de livraison | **314** | 2019-2026 |
-| 0 | 6 | Facture | 31 168 | 2019-2026 |
-| 0 | 7 | Facture comptabilisée | 149 943 | **2015-2024** |
-| 1 | 12 | Commande fournisseur | 2 567 | 2019-2026 |
-| 1 | 13 | Bon de réception | 3 116 | 2019-2026 |
-| 1 | 16 | Facture fournisseur | 2 113 | 2019-2026 |
-| 2 | 20 / 21 | Entrée / sortie de stock | 5 054 | → 2026 |
+| | Articles |
+|---|---:|
+| quantité identique à la photo | **15 242** (96,4 %) |
+| en place supérieur | 376 |
+| en place inférieur | 192 |
 
-Les lignes portent article, désignation, quantité, prix unitaire HT, taux de TVA et
-jusqu'à trois remises. Sur 2025-2026 seulement : **25 137 factures, 2 431 196 € HT**.
+Le stock en place **est** celui de l'ancien ERP, à ceci près qu'il est plus récent : l'écart
+net de +5 135 unités correspond aux ventes et réceptions postérieures à la copie.
 
-### D2. Les rattachements sont excellents
+**Décision : relocaliser, jamais réajuster.** La reprise déplace le stock vers l'emplacement
+que la source connaît — seule information qui manque à la boutique — et ne touche pas aux
+quantités. Aligner sur la photo aurait effacé 5 135 unités de mouvements réels, dont des
+ventes en boutique, et contredit ce que le client voit à l'écran.
 
-| | |
-|---|---|
-| Documents de vente dont le tiers existe en cible | **304 783 / 305 171 (99,9 %)** |
-| Documents d'achat dont le fournisseur existe | **7 805 / 7 805 (100 %)** |
-| Lignes de facture rattachées à un produit | **500 357 / 519 890 (96 %)** |
+Le mécanisme est décrit en tête de `class/migrationstock.class.php`. Deux points méritent
+d'être retenus au-delà de ce projet :
 
-Les 19 295 lignes sans référence sont des lignes de texte libre, que Dolibarr sait
-représenter.
+- **Le régime se choisit ligne par ligne, pas par une option.** Une option de ligne de
+  commande qu'on oublie de passer double le stock ; une condition évaluée sur l'état réel du
+  produit ne le fait jamais.
+- **Antidater ne protège de rien.** `_create()` fait un `reel = reel + qty`
+  (`mouvementstock.class.php:608`) sans jamais trier par date : poser une ouverture au 1er
+  juillet par-dessus un stock de juillet donne le même total qu'en la datant du jour. La date
+  ne sert qu'à l'écran « Stock à une date », qui reconstitue par les mouvements datés
+  (`stockatdate.php:216`) — utile pour la lisibilité de l'historique, sans effet sur les
+  quantités.
 
-Taux de TVA rencontrés : 20 % (343 748 lignes), 5,5 % (135 663), 0 % (35 596), plus
-quelques 5 % et 6 % résiduels.
+### S10. La valorisation suit la règle du coût de revient, repli compris
 
-### D3. Une coupure d'archivage fin 2019
+Le prix porté par chaque mouvement d'entrée est celui qui alimente le coût moyen pondéré de
+Dolibarr. Il applique donc **exactement** la règle de A7 : coût standard, puis prix de revient
+unitaire en dessous du centime. Sur les 5 926 lignes à reprendre :
 
-Avant octobre 2019, il ne subsiste **que des factures comptabilisées** : devis, commandes,
-préparations et réceptions ont été purgés. Les factures comptabilisées s'arrêtent elles-mêmes
-en septembre 2024, quand les factures « vivantes » prennent le relais — **aucun recouvrement
-entre les deux**, c'est une bascule propre, pas un doublon.
+| Valorisation | Lignes | Unités |
+|---|---:|---:|
+| coût standard | 5 801 | |
+| prix de revient, en repli | **21** | 93 |
+| aucune valeur disponible | 104 | 812 |
 
-### D4. Aucun règlement n'est enregistré
+Le repli n'est pas anecdotique : ces 21 lignes représentent **14 443,92 €** qui entreraient
+sinon avec un coût moyen nul. La règle doit être la même des deux côtés, sans quoi la fiche
+article afficherait un coût de revient et l'onglet Stock une valorisation à zéro pour le même
+produit.
 
-`reglement_1`, `reglement_2` et `reglement_3` sont **vides sur les 181 111 factures**.
-
-**C'est le point le plus bloquant** : rien ne dit ce qui est payé. Reprises telles quelles,
-toutes les factures arriveraient **impayées** dans Dolibarr, ce qui fausserait entièrement
-les comptes clients et les relances.
-
-### D5. Le flux s'arrête à la préparation
-
-**314 bons de livraison pour 61 377 préparations.** La sortie de stock se fait à la
-facturation, pas à la livraison (confirmé par la reconstitution du stock, voir S9).
-Reprendre des expéditions Dolibarr n'aurait donc guère de sens.
-
-Le chaînage vers la commande d'origine existe sur **200 717 lignes de facture sur 519 890**
-(39 %), via `DL_PieceBC`.
-
-### D6. `f_docexpedition_global` est presque vide
-
-61 156 lignes, mais **aucune URL de suivi**, aucun e-mail, aucun commentaire, aucun message
-cadeau. Seuls **14 247 identifiants de point relais** et 2 627 marqueurs d'expédition sont
-renseignés. Les colonnes de statut de préparation sont à zéro sur la totalité.
-
-### D7. `f_docligne` est un résidu
-
-243 lignes, dont **150 dupliquent `f_docligne_global`**. Table de travail, sans valeur.
-
-### Ce qui vaudrait la peine, le jour venu
-
-**À reprendre** : les factures depuis 2019 (31 168) avec leurs lignes, pour l'historique
-commercial consultable. Éventuellement les commandes clients de la même période.
-
-**À écarter** : les 149 943 factures comptabilisées antérieures à 2024 (volume énorme,
-valeur documentaire seulement), les préparations, les bons de livraison, et
-`f_docexpedition_global`.
-
-**À trancher avec le client avant de commencer** : à quoi doit servir cet historique ?
-Consulter le passé d'un client, ou disposer d'une comptabilité complète ? Dans le second
-cas, l'absence de règlements est rédhibitoire — il faudra les récupérer ailleurs, n'importer
-que des factures soldées, ou renoncer.
+Les 104 lignes sans valeur disponible reçoivent un mouvement sans prix : la quantité est
+juste, le coût moyen reste nul. Le rapport les dénombre, ainsi que les lignes passées par le
+repli.
 
 ---
+
+## Documents commerciaux (`f_doc*`) — non repris
+
+Les quatre tables de documents — 318 030 en-têtes, 1 039 279 lignes — ont été analysées le
+29/07/2026 mais **aucune reprise n'est engagée**. L'état des lieux complet est dans
+[DOCUMENTS.md](DOCUMENTS.md) : nomenclature des types, colonnes utiles, rattachements
+mesurés, correspondance possible avec les objets Dolibarr et requêtes de référence.
+
+Les trois points qui décideront du périmètre, résumés ici :
+
+- **Aucun règlement n'est enregistré** — les colonnes prévues sont vides sur les 181 111
+  factures. Reprises telles quelles, elles arriveraient toutes impayées. C'est le point
+  bloquant.
+- **Coupure d'archivage fin 2019** : avant, il ne reste que des factures comptabilisées.
+- **314 bons de livraison pour 61 377 préparations** : le flux s'arrête à la préparation,
+  la sortie de stock se faisant à la facturation.
+
+À l'inverse, les rattachements sont excellents : 99,9 % des documents de vente retrouvent
+leur tiers, 96 % des lignes de facture retrouvent leur produit.
 
 ## Pièges Dolibarr rencontrés
 
