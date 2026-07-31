@@ -113,5 +113,14 @@ function aeromigrationGetScripts()
             'class' => 'MigrationStock',
             'file'  => '/aeromigration/class/migrationstock.class.php',
         ),
+        // Dépend des tiers ET des articles. À passer après « stock » sans que ce soit une
+        // dépendance : la validation d'une commande fournisseur ne crée aucun mouvement,
+        // les constantes STOCK_CALCULATE_ON_SUPPLIER_* n'étant pas posées.
+        array(
+            'code'  => 'supplierorder',
+            'label' => 'AeroMigScriptSupplierOrder',
+            'class' => 'MigrationSupplierOrder',
+            'file'  => '/aeromigration/class/migrationsupplierorder.class.php',
+        ),
     );
 }

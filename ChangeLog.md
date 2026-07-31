@@ -6,9 +6,113 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.9.0] — 2026-07-31
+
+### Ajouté
+
+- **Reprise des commandes fournisseur** — `migrate.php supplierorder`. Premier script du
+  module à reprendre un **document à lignes** : 2 567 commandes et 24 265 lignes, de 2019 à
+  2026, en 4 min 34.
+
+  | | |
+  |---|---:|
+  | Commandes reçues complètement | 1 852 |
+  | Commandes annulées | 603 |
+  | Commandes en attente de réception | 112 |
+  | Lignes écrites | 24 265 |
+  | Montant repris | 6 404 643 € HT |
+
+  Contrôle des montants sur les 2 399 commandes en euros : **2 379 identiques au centime**,
+  20 écarts de 3 à 5 centimes dus aux arrondis de ligne, soit **1,60 € d'écart sur 5,6 M€**.
+
+#### Les numéros d'origine sont conservés
+
+`create()` pose `ref = '(PROV<id>)'` et le module de numérotation attribue normalement la
+référence à la validation. Mais `valid()` ne renumérote que si la référence est encore
+provisoire (`fournisseur.commande.class.php:816`) : la poser avant suffit à la garder. Les
+2 567 `DO_Piece` étant uniques, le client retrouve ses `CLMBCF990002512` plutôt que des
+`CF2607-0001` qui ne lui diraient rien.
+
+#### Le statut vient d'une colonne que Sage ne documente pas
+
+`DO_Statut` vaut **9 sur les 2 567 commandes** : elle ne distingue rien. L'annulation est
+portée par **`Z_Annule`**, colonne ajoutée par l'applicatif par-dessus le schéma Sage — d'où
+son préfixe `Z_`. Établi par lecture d'écran sur six documents : les cinq annulés portent
+`A`, celui en cours ne porte rien.
+
+Le reste se déduit du chaînage `DL_PieceBC` vers les réceptions et les factures. Les 112
+commandes qui restent en attente sont le seul en-cours réel, et plus de la moitié date de
+2024 ou après.
+
+> **La même colonne sert côté ventes** — 1 423 commandes clients annulées sur 60 936 — et
+> `f_docentete_global` porte aussi `Z_Solde`, `Z_Supprime` et `Z_Top`. Toute analyse d'une
+> table de ce jeu devrait commencer par lister ses colonnes non-Sage : celles qui comptent
+> sont parfois celles que le schéma d'origine ne connaît pas.
+
+#### Deux obstacles rencontrés à l'écriture
+
+**`create()` n'écrit ni `ref_ext` ni `date_commande`.** Ces colonnes ne figurent tout
+simplement pas dans sa requête d'insertion. Sans rattrapage par `update()`, la reprise
+n'aurait aucune clé d'idempotence — un second passage aurait recréé les 2 567 commandes — et
+toutes seraient sans date. Détecté au premier essai d'écriture, sur quinze commandes.
+
+**La validation refusait 233 commandes sur 2 567**, avec
+`ErrorOneLineContainsADisactivatedProduct` : `valid()` rejette tout document portant un
+article dont `tobuy` vaut 0, et **1 076 des 15 811 articles repris sont arrêtés**. Le
+contrôle est justifié à la saisie, absurde sur un historique — ces commandes ont existé.
+`SUPPLIER_ORDER_NOCHECK_ONBUY_PRODUCTS_ONVALID` est donc posée **en mémoire du processus**,
+jamais en base : le comportement de l'application pour les utilisateurs n'est pas modifié.
+
+> **Un effet de bord instructif.** Le `rollback()` interne de `valid()` ne se contente pas
+> d'annuler sa propre transaction : il emporte celle que le socle avait ouverte autour de la
+> ligne, et les écritures suivantes se perdent silencieusement. Sur le premier passage
+> complet, 233 erreurs n'ont laissé que **20 commandes** en base au lieu des 2 334 attendues.
+> Un script qui compte ses succès sans vérifier la base aurait annoncé une réussite.
+
+#### Choix de reprise
+
+- **Devises** — 120 commandes en devise étrangère (109 USD, 8 CAD, 3 GBP). Une commande dont
+  le taux de change source est nul est reprise dans la devise de l'instance : un taux nul
+  rendrait tous les montants infinis.
+
+  > **Les deux systèmes comptent le taux à l'envers l'un de l'autre.** `DO_Cours` donne les
+  > euros par unité de devise, `multicurrency_tx` les unités de devise par euro. S'en
+  > apercevoir demandait une valeur connue des deux côtés : l'article `7248` vaut 50,80 $ pour
+  > 47,244 €, et la ligne de `CLMBCF990002266` porte 47,710344 avec un cours de 0,93918 —
+  > soit `50,80 × 0,93918`. Les lignes de document sont donc déjà en euros, ce qui rendait les
+  > totaux justes sans rien faire ; seul l'onglet devise était faux, affichant 2 268 € pour
+  > 2 041 $ au lieu de 2 520 $. Un défaut qui ne se voyait que sur 120 commandes, et sur un
+  > onglet que personne n'ouvre avant la mise en service.
+- **Remises** — 1 275 lignes. La source en autorise trois par ligne, une seule est utilisée.
+  Les remises exprimées en montant et les remises négatives (des majorations) sont ignorées,
+  Dolibarr n'ayant qu'un taux par ligne.
+- **Lignes conservées en texte libre** — 18 lignes sans référence article, et 2 dont l'article
+  n'a pas été repris. Les perdre fausserait le montant du document.
+- **50 commandes sans aucune ligne** sont reprises telles quelles : elles existent dans la
+  source, les masquer serait une décision qui ne nous appartient pas.
+- **Une référence corrompue**, `undefinedBCF9900`, où le `undefined` de JavaScript s'est
+  glissé dans le numéro. Unique, donc reprise telle quelle, et signalée au rapport.
+
+
 ## [0.8.1] — 2026-07-30
 
 ### Corrigé
+
+- **`warehouse` adoptait l'entrepôt principal existant sans lui poser son marqueur**, et
+  `stock` refusait alors de démarrer — « Entrepôt principal introuvable (marqueur
+  SAGE:DEPOT1) ». Rencontré en production, où l'entrepôt de la boutique préexistait à la
+  reprise : `warehouse` le reconnaissait bien par son libellé, l'annonçait « déjà présent »,
+  mais rien en base ne disait qu'il tenait ce rôle.
+
+  Le marqueur est désormais posé à l'adoption, comme il l'est déjà pour les tiers venus de la
+  boutique : on ne recrée pas, on ne renomme pas, on complète ce qui est vide et on marque.
+  Vérifié qu'aucune autre colonne ne bouge — `Entrepot::update()` réécrit tout l'objet, ce qui
+  n'est neutre que parce que `fetch()` charge tout ; les triggers sont désactivés, poser un
+  marqueur technique n'étant pas une modification métier.
+
+  Un marqueur venu d'un autre import n'est **jamais écrasé** : il appartient à cet import et le
+  détruire lui ferait perdre son idempotence. Le rapport avertit alors que `stock` ne trouvera
+  pas son dépôt principal, plutôt que de laisser découvrir le blocage au lancement suivant.
 
 - **La ventilation par emplacement était comptée deux fois** dans le rapport de simulation,
   dès lors que le produit portait déjà du stock. `resolveWarehouse()` tient les compteurs de

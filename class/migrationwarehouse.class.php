@@ -127,6 +127,15 @@ class MigrationWarehouse extends AeroMigrationRunner
     /** @var int Entrepôt principal créé durant ce passage */
     protected $mainCreated = 0;
 
+    /** @var int 1 si l'entrepôt principal préexistait et a été adopté */
+    protected $mainAdopted = 0;
+
+    /** @var int 1 si le marqueur de reprise vient d'être posé sur l'entrepôt adopté */
+    protected $mainStamped = 0;
+
+    /** @var string Marqueur d'un autre import trouvé sur l'entrepôt, jamais écrasé */
+    protected $mainForeignKey = '';
+
     /** @var int Emplacements de la source qu'aucun article n'occupe */
     protected $unused = 0;
 
@@ -291,10 +300,11 @@ class MigrationWarehouse extends AeroMigrationRunner
         }
 
         // Un entrepôt porte déjà ce nom sans venir de la reprise : on l'adopte plutôt que
-        // d'échouer sur l'unicité.
+        // d'échouer sur l'unicité, et on lui pose son marqueur.
         $key = $this->labelKey($this->mainWarehouseLabel);
         if (isset($this->warehouseByLabel[$key])) {
             $this->mainWarehouseId = $this->warehouseByLabel[$key];
+            $this->stampMainWarehouse();
             return $this->mainWarehouseId;
         }
 
@@ -332,6 +342,74 @@ class MigrationWarehouse extends AeroMigrationRunner
         $this->mainCreated = 1;
 
         return $this->mainWarehouseId;
+    }
+
+    /**
+     * Pose le marqueur de reprise sur l'entrepôt principal adopté.
+     *
+     * Sans cela, l'adoption reste invisible : l'entrepôt fait office de dépôt principal
+     * pendant ce passage, mais rien ne le dit en base. Le script `stock` cherche
+     * précisément ce marqueur pour savoir où verser les articles sans emplacement, et
+     * s'arrête net s'il ne le trouve pas — c'est arrivé en production, où l'entrepôt de la
+     * boutique préexistait à la reprise.
+     *
+     * C'est la même règle que pour les tiers venus de la boutique : on ne recrée pas, on
+     * ne renomme pas, on complète ce qui est vide et on pose son marqueur.
+     *
+     * Le passage par `Entrepot::update()` réécrit toutes les colonnes de l'entrepôt depuis
+     * l'objet, ce qui n'est neutre que parce que `fetch()` les charge toutes — vérifié
+     * colonne par colonne, extrafields compris. Les triggers sont en revanche désactivés :
+     * poser un marqueur technique n'est pas une modification métier, et WAREHOUSE_MODIFY
+     * pourrait déclencher une synchronisation vers la boutique pour rien.
+     *
+     * @return int 1 si le marqueur est en place, -1 en cas d'échec
+     */
+    protected function stampMainWarehouse()
+    {
+        $this->mainAdopted = 1;
+
+        if ($this->dryrun || $this->mainWarehouseId <= 0) {
+            return 1;
+        }
+
+        $entrepot = new Entrepot($this->db);
+        if ($entrepot->fetch($this->mainWarehouseId) <= 0) {
+            $this->errors[] = array(
+                'key'     => '',
+                'message' => 'Entrepôt principal '.$this->mainWarehouseId.' illisible : '
+                    .$this->objectErrors($entrepot),
+            );
+            return -1;
+        }
+
+        $marker = $this->buildRefExt($this->mainImportKey);
+
+        if ((string) $entrepot->import_key === $marker) {
+            return 1;
+        }
+
+        // Un marqueur étranger n'est jamais écrasé : il appartient à un autre import, et le
+        // détruire ferait perdre à celui-ci son idempotence. Signalé au rapport, car « stock »
+        // ne trouvera alors pas son dépôt principal.
+        if (!empty($entrepot->import_key)) {
+            $this->mainForeignKey = (string) $entrepot->import_key;
+            return 1;
+        }
+
+        $entrepot->import_key = $marker;
+
+        if ($entrepot->update($this->mainWarehouseId, $this->user, 1) <= 0) {
+            $this->errors[] = array(
+                'key'     => '',
+                'message' => 'Marqueur '.$marker.' non posé sur l\'entrepôt '
+                    .$this->mainWarehouseId.' : '.$this->objectErrors($entrepot),
+            );
+            return -1;
+        }
+
+        $this->mainStamped = 1;
+
+        return 1;
     }
 
     /**
@@ -698,6 +776,23 @@ class MigrationWarehouse extends AeroMigrationRunner
         $lines[] = '          Les emplacements sont rattachés à plat en dessous. Leurs libellés';
         $lines[] = '          portent déjà leur chemin (« S1-A15-4 »), la hiérarchie fine peut';
         $lines[] = '          donc être construite ensuite sans jamais les renommer.';
+
+        if ($this->mainStamped) {
+            $lines[] = '          Il ne venait pas de la reprise : marqueur « '
+                .$this->buildRefExt($this->mainImportKey).' » posé.';
+            $lines[] = '          Rien d\'autre n\'a été modifié — ni son nom, ni son adresse.';
+        } elseif ($this->mainForeignKey !== '') {
+            $lines[] = '';
+            $lines[] = '          ATTENTION : cet entrepôt porte déjà le marqueur « '.$this->mainForeignKey.' »,';
+            $lines[] = '          venu d\'un autre import. Il n\'a pas été écrasé, mais « migrate.php stock »';
+            $lines[] = '          ne trouvera pas son dépôt principal. Posez « '
+                .$this->buildRefExt($this->mainImportKey).' »';
+            $lines[] = '          sur un entrepôt, ou arbitrez le conflit avant de reprendre les stocks.';
+        } elseif ($this->mainAdopted && $this->dryrun) {
+            $lines[] = '          Il ne vient pas de la reprise : son marqueur « '
+                .$this->buildRefExt($this->mainImportKey).' »';
+            $lines[] = '          sera posé hors simulation, sans rien changer d\'autre.';
+        }
 
         if ($this->mergedTwins > 0) {
             $lines[] = '';

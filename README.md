@@ -31,6 +31,7 @@ php migrate.php product        articles        → rattachés aux catégories
 php migrate.php supplierprice  tarifs fournisseurs → relient articles et tiers
 php migrate.php warehouse      entrepôts et emplacements
 php migrate.php stock          stocks → rattachés aux articles et aux entrepôts
+php migrate.php supplierorder  commandes fournisseur → relient tiers et articles
 ```
 
 `warehouse` lit `f_emplacements`, **seule table du jeu source qui ne vienne pas de Sage** :
@@ -49,6 +50,7 @@ nouvelle instance.
 | `supplierprice` | `thirdparty`, `product` | les lignes sans article ni tiers repris sont ignorées, et le rapport les dénombre |
 | `warehouse` | — | s'arrête si `f_emplacements` ou le dépôt principal sont absents |
 | `stock` | `product`, `warehouse` | s'arrête si l'entrepôt principal est absent ; les lignes sans article repris sont ignorées et dénombrées |
+| `supplierorder` | `thirdparty`, `product` | les commandes dont le fournisseur n'est pas repris sont écartées et dénombrées ; les lignes sans article deviennent du texte libre |
 
 Les deux derniers restent tolérants. Un article sans catégorie demeure un article valide, et
 l'on peut vouloir reprendre les produits seuls ; le rapport indique alors clairement

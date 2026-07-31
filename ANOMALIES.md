@@ -416,7 +416,7 @@ effet de bord d'une reprise de prix d'achat.
 | F5 | Clés inexploitables (`CT_Num` vide ou inconnu, `AR_Ref` orphelin) | 12 | Écartées et listées |
 | F6 | `AF_QteMini` et `AF_Colisage` font double emploi | 15 962 | Une seule reprise |
 | F7 | `AF_Remise` est bien un pourcentage | 58 | Repris dans `remise_percent`, vérifié à l'écran |
-| F8 | **Remise absente là où l'ancien ERP en affiche une** | 12 347 | **Ouvert** — export complémentaire à demander |
+| F8 | **Le tarif affiché n'est pas dans les données livrées** | 6 fiches sur 9 vérifiées | **Ouvert** — export applicatif à demander |
 | F9 | Tabulations dans les références | 6 | Nettoyées |
 | F10 | Colonnes sans emploi | 15 962 | Non reprises |
 | F11 | `AR_PrixAch` et `AF_PrixAch` divergent | 8 263 | Deux notions distinctes, seul le tarif est repris |
@@ -539,10 +539,23 @@ visible et modifiable dans l'onglet **Prix fournisseurs** de la fiche article, c
 
 Le cas 13566 est reproduit à l'identique en cible : `price` 39,00 · `remise_percent` 30.
 
-### F8. La remise manque sur la quasi-totalité des lignes, et rien ne la reconstitue
+> **La portée de ce constat est limitée à la nature de la colonne**, et il ne faut pas en tirer
+> qu'elle est fiable. `AF_Remise` est bien un pourcentage appliqué à `AF_PrixAch` — mais sur
+> neuf fiches confrontées à l'écran de l'ancien ERP, six affichent autre chose que la table.
+> Voir F8, qui est le compte rendu de cette confrontation.
+
+### F8. Le tarif fournisseur affiché n'est pas dans les données livrées
 
 C'est **la seule anomalie de tarif fournisseur qui reste ouverte**, et elle ne se règle pas
-côté reprise.
+côté reprise. Elle a coûté assez d'heures pour mériter un compte rendu complet.
+
+#### Ce qu'on cherche
+
+Pour chaque couple article / fournisseur, le prix d'achat tel que l'ancien ERP l'affiche : un
+brut, une remise, un net. Le calcul y est constant — `net = brut × (1 − remise/100)` — et c'est
+la seule chose qui ne varie jamais dans tout ce qui suit.
+
+#### Le point de départ : une colonne presque vide
 
 | `AF_Remise` | Lignes |
 |---|---:|
@@ -550,55 +563,85 @@ côté reprise.
 | 0 | 3 557 |
 | > 0 | **58** |
 
-Or l'ancien ERP affiche des remises sur des lignes dont `AF_Remise` est NULL. Contrôle sur
-l'article **14240** (F295, Garmin) : l'écran donne brut 1 576,19 · remise **17 %** · net
-1 308,24 — et 1 576,19 × 0,83 = 1 308,24, la mécanique de F7 exactement. Mais `AF_Remise` y
-est **NULL**, et `cbModification` date du 18/09/2024 : la ligne n'a pas bougé depuis.
+#### Le vrai problème : la table est contredite par l'écran
 
-Quatre pistes de reconstitution, toutes épuisées :
+Ce n'est pas qu'elle soit peu remplie. **Neuf fiches ont été ouvertes dans l'ancien ERP et
+confrontées à la table. Six divergent.**
 
-1. **Autre colonne de `f_artfourniss`** — `AF_TypeRem`, `AF_Garantie`, `AF_Conversion` sont
-   NULL à 100 %. `AF_RemiseNouv` et `AF_DateApplication` aussi. Rien.
-2. **`f_artfournissgamme`** (tarifs par gamme, 688 lignes / 137 articles) — aucune ligne
-   pour 14240, et 9 remises seulement sur l'ensemble.
-3. **Barème de remise dans une autre table source** — recherche sur toutes les colonnes
-   contenant « Remise » dans les 33 tables : hors `f_artfourniss` et `f_artfournissgamme`,
-   elles n'apparaissent que dans `f_docligne` (remises de ligne de document, historique).
-   Les 13 tables supplémentaires de l'import intégral des ZIP n'en contiennent aucune.
-4. **Export CSV `expart.csv`** — inexploitable, voir ci-dessous.
+| Article | L'écran affiche | La table contient | Nature de l'écart |
+|---|---|---|---|
+| `13566` | brut 39,00 · remise 30 % | idem | concorde |
+| `3355` | brut 333,34 · remise 0 | idem (`AF_Remise` NULL) | concorde |
+| `7248` | brut **50,80 $** · remise 0 | `AF_PrixAch` 47,244 € | concorde via `AF_PrixDev` |
+| `14240` | remise **17 %** | `AF_Remise` NULL | remise absente |
+| `11866` | remise **0 %** | `AF_Remise` 33,50 | remise contredite |
+| `13463` | remise **7,85 %** | `AF_Remise` 5,00 | remise contredite |
+| `15721` | remise **3 %** | `AF_Remise` 0,00 | remise absente |
+| `13631` | brut **13,24** | `AF_PrixAch` 1,92 | prix contredit |
+| `11912` | brut **39,00** | `AF_PrixAch` 0,00 | prix absent |
 
-**Pourquoi le CSV ne sauve pas la situation.** Sa colonne `AF_PrixAch` a été confrontée aux
-44 lignes dont la remise est connue :
+**Ce ne sont pas des données périmées.** Les copies vont jusqu'au 25/06/2026, et les lignes
+concernées n'ont pas été modifiées depuis — `15721` remonte à septembre 2025, `11912` à mars
+2023, `3355` à 2019.
 
-| Ce que porte le CSV | Lignes |
-|---|---:|
-| le prix **net** (brut − remise) | 14 |
-| le prix **brut** | 13 |
-| ni l'un ni l'autre | 17 |
+#### Trois reconstitutions essayées, trois réfutations
 
-Le fichier mélange donc trois choses, et les 17 valeurs inclassables s'expliquent par des
-prix qui ont bougé entre l'export et la copie de base — 13463 par exemple : CSV 6,2662, soit
-6,60 remisé de 5 %, quand le brut vaut aujourd'hui 6,80. **Aucune règle ne permet de savoir
-si une valeur du CSV est brute ou nette.** Il est écarté.
+**1. Depuis la table fournisseur** (`AF_PrixAch` + `AF_Remise`) — échoue sur les six cas
+ci-dessus. C'est pourtant ce que fait la reprise, faute de mieux.
 
-**Un cas achève de disqualifier la source.** Article **13631** : `AF_PrixAch` = 1,92 dans la
-base, `cbModification` au 18/12/2022 — mais l'ancien ERP affiche **13,24** en prix d'achat
-brut, remise 0, comme le CSV. Ce n'est plus une remise absente, c'est un **prix faux** dans
-la copie livrée.
+**2. Depuis l'historique des achats.** `f_docligne_global.DL_Remise01REM_Valeur` porte bien
+des remises — 4 534 lignes d'achat sur 6 855 articles —, et c'est là qu'on retrouve les 17 %
+de l'article `14240`, introuvables ailleurs. La piste semblait décisive. Elle ne l'est pas :
 
-**Conséquence pour la reprise.** Le brut est repris tel quel, la remise quand elle existe.
-Sur les 12 347 lignes sans remise, le prix d'achat en cible est donc **au mieux exact, au
-pire surévalué du taux de remise**. Il n'y a pas de correctif possible sans une donnée que
-nous n'avons pas.
+- la remise d'un document est celle **négociée ce jour-là**, pas le tarif de référence ;
+- elle s'applique visiblement au **document entier** : le 28/05/2026, les articles 13463,
+  13470, 13471 et 13472 du fournisseur F990000055 portent tous 7,85 %, quand leur tarif est
+  à 5 % ;
+- confrontée aux 58 remises connues, elle n'en retrouve que **28** ;
+- et pour `14240`, l'écran affiche la remise de **décembre 2023** (17 %), pas celle du dernier
+  achat de juin 2025 (19 %). Même la règle « la plus récente » ne tient pas.
 
-**Ce qu'il faut demander à l'éditeur de l'ancien ERP** — au choix, l'un suffit :
+**3. Depuis le coût de revient de l'article** — `remise = 1 − AR_CoutStd / AR_PrixAch`. Sur les
+53 témoins exploitables : 13 exactes, 18 à un point près, **35 divergentes**. `AR_CoutStd` est
+un coût moyen qui intègre l'historique des achats, pas un prix net courant.
 
-- un export de `F_ARTFOURNISS` avec `AF_Remise` **et** `AF_TypeRem` réellement peuplées ;
-- ou, plus simple à obtenir, un export à deux colonnes `AR_Ref` / **prix d'achat net**, tel
-  qu'affiché à l'écran, daté du jour de la bascule.
+Chaque piste explique quatre cas sur cinq et se casse sur le suivant. **Ce n'est donc pas un
+problème d'interprétation qu'un effort supplémentaire résoudrait : l'information affichée est
+calculée ou stockée ailleurs que dans les tables exportées.**
 
-Le second est préférable : il court-circuite la question du barème et se contrôle article par
-article sur trois écrans.
+#### Deux acquis à ne pas perdre
+
+**L'ancien ERP affiche le prix dans sa devise d'origine.** L'article `7248` s'affiche à
+**50,80 $** (`AF_PrixDev` = 50,80, `AF_Devise` = 2) ; `AF_PrixAch` = 47,244 n'en est que la
+conversion en euros. Une lecture de la seule colonne en euros perd l'information de devise.
+
+**`AF_PrixAch` n'a pas de sémantique constante.** Sur un échantillon de 20 couples : elle porte
+le **net** sur certains (`1646` 10,10 pour un brut à 10,50), le **brut** sur d'autres (`15721`
+15,20), une conversion de devise (`7248`), ou zéro (`11912`). C'est ce qui explique
+rétrospectivement l'inclassabilité de l'export CSV, qui exporte cette colonne : sur les 44
+lignes à remise connue, il donne 14 fois le net, 13 fois le brut, 17 fois autre chose.
+
+#### Conséquence pour la reprise
+
+Le brut est repris tel quel, la remise quand elle existe. Sur les 12 347 lignes sans remise, le
+prix d'achat en cible est **au mieux exact, au pire surévalué du montant de la remise**.
+
+**Décision : ne rien reconstituer.** Reprendre `AF_PrixAch` et `AF_Remise` reste ce qu'il y a de
+plus défendable — c'est la donnée telle qu'elle est livrée, pas une déduction dont on sait
+qu'elle échoue une fois sur cinq. Une reconstitution plausible mais fausse serait pire que
+l'absence : elle serait invisible.
+
+#### Ce qu'il faut demander à l'éditeur
+
+Un export produit par **l'application** et non par une copie de ses tables :
+
+```
+AR_Ref   |   CT_Num   |   prix d'achat brut affiché   |   remise affichée
+```
+
+À défaut, l'indication de la table et des colonnes où l'application lit ces deux valeurs. Les
+quatre références `15721`, `11912`, `3355` et `7248` suffisent à poser la question sans qu'elle
+puisse être éludée : elles couvrent les quatre configurations rencontrées.
 
 ### F9. Tabulations dans les références
 
@@ -660,6 +703,7 @@ l'application, pas d'une copie de ses tables.**
 | E4 | Libellés fantaisistes | 6 | Repris tels quels |
 | E5 | La salle 6 manquait à l'extraction | 8 (114 articles) | Récupérée, couverture désormais totale |
 | E7 | Un seul emplacement par article dans la source | 27 670 lignes | Sans objet : Dolibarr en autorise autant qu'on veut |
+| E8 | L'entrepôt principal adopté n'était pas marqué | 1 | Marqueur posé à l'adoption (0.8.1) |
 
 ### E1. Les libellés n'étaient nulle part dans les données
 
@@ -784,6 +828,32 @@ emplacements, ou dans vingt.
 **Conséquence pour la reprise** : elle pose le stock dans l'unique emplacement connu de la
 source. La ventilation sur plusieurs emplacements se fera ensuite dans Dolibarr, par les
 transferts de stock, au fil du rangement réel.
+
+### E8. L'entrepôt adopté n'était pas marqué, et le script suivant refusait de démarrer
+
+Rencontré en production. L'entrepôt principal y préexistait — créé par la boutique, nommé
+`BOUTIQUE.AERO` —, et `warehouse` l'a correctement reconnu par son libellé plutôt que d'en
+créer un second, ce que `uk_entrepot_label` aurait de toute façon refusé. Son rapport
+annonçait « déjà présent ». Mais **rien en base ne disait qu'il tenait ce rôle** : son
+`import_key` restait vide.
+
+`stock`, qui cherche le marqueur `SAGE:DEPOT1` pour savoir où verser les articles sans
+emplacement, s'arrêtait donc net :
+
+```
+Entrepôt principal introuvable (marqueur SAGE:DEPOT1) : lancez « migrate.php warehouse » avant celui-ci.
+```
+
+Message trompeur au possible : `warehouse` venait précisément d'être lancé, avec succès.
+
+**Corrigé en 0.8.1** : le marqueur est posé à l'adoption, comme il l'est pour les tiers venus
+de la boutique. Un marqueur venu d'un autre import n'est jamais écrasé — le rapport avertit
+alors du conflit plutôt que de le laisser découvrir au lancement suivant.
+
+> **La leçon.** Une adoption qui ne laisse aucune trace en base n'est pas une adoption, c'est
+> une coïncidence qui se répète à chaque passage. Tout objet qu'un script reconnaît comme
+> sien doit porter sa marque, sans quoi le script d'après n'a aucun moyen de le retrouver —
+> et le message d'erreur qu'il produira désignera le mauvais coupable.
 
 ---
 

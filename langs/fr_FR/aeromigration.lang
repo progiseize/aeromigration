@@ -28,3 +28,4 @@ AeroMigScriptWarehouse=Entrepôts et emplacements
 AeroMigScriptStock=Stocks
 AeroMigStatusDone=OK
 AeroMigStatusUnknown=Indéterminé
+AeroMigScriptSupplierOrder=Commandes fournisseur
