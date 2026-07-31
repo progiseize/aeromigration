@@ -201,6 +201,24 @@ class MigrationSupplierOrder extends AeroMigrationRunner
     protected $missingSupplierCodes = array();
 
     /**
+     * Normalise une référence source pour la recherche en index.
+     *
+     * MySQL compare sans tenir compte de la casse, PHP compare les clés de tableau à
+     * l'identique : une requête de contrôle SQL peut donc conclure qu'un article est
+     * rattachable là où le script ne le trouvera pas. Le cas est spectaculaire côté ventes,
+     * où la source écrit les frais de port tantôt `PortSTD` tantôt `PORTSTD` — 37 877 lignes
+     * concernées. Aucune collision n'en résulte : les 15 811 références des produits repris
+     * restent 15 811 une fois mises en minuscules.
+     *
+     * @param string $ref Référence source
+     * @return string     Clé d'index
+     */
+    protected function indexKey($ref)
+    {
+        return strtolower(trim((string) $ref));
+    }
+
+    /**
      * Chargement des référentiels.
      *
      * @return int 1 si OK, -1 en cas d'erreur
@@ -275,7 +293,7 @@ class MigrationSupplierOrder extends AeroMigrationRunner
         }
 
         while ($obj = $this->db->fetch_object($resql)) {
-            $key = substr((string) $obj->ref_ext, strlen($prefix));
+            $key = $this->indexKey(substr((string) $obj->ref_ext, strlen($prefix)));
             if ($key !== '') {
                 $this->supplierBySage[$key] = (int) $obj->rowid;
             }
@@ -305,7 +323,7 @@ class MigrationSupplierOrder extends AeroMigrationRunner
         }
 
         while ($obj = $this->db->fetch_object($resql)) {
-            $key = substr((string) $obj->ref_ext, strlen($prefix));
+            $key = $this->indexKey(substr((string) $obj->ref_ext, strlen($prefix)));
             if ($key !== '') {
                 $this->productBySage[$key] = array('id' => (int) $obj->rowid, 'ref' => (string) $obj->ref);
             }
@@ -468,7 +486,7 @@ class MigrationSupplierOrder extends AeroMigrationRunner
             return $this->refreshStatus($row, $existingId);
         }
 
-        $supplierCode = trim((string) $row->DO_Tiers);
+        $supplierCode = $this->indexKey($row->DO_Tiers);
         if (!isset($this->supplierBySage[$supplierCode])) {
             $this->missingSuppliers++;
             $this->missingSupplierCodes[$supplierCode] = true;
@@ -616,13 +634,14 @@ class MigrationSupplierOrder extends AeroMigrationRunner
      */
     protected function mapLine($line)
     {
-        $sourceRef = trim((string) $line->AR_Ref);
-        $productId = 0;
+        $sourceRef  = trim((string) $line->AR_Ref);
+        $productKey = $this->indexKey($sourceRef);
+        $productId  = 0;
 
         if ($sourceRef === '') {
             $this->freeTextLines++;
-        } elseif (isset($this->productBySage[$sourceRef])) {
-            $productId = (int) $this->productBySage[$sourceRef]['id'];
+        } elseif (isset($this->productBySage[$productKey])) {
+            $productId = (int) $this->productBySage[$productKey]['id'];
         } else {
             // L'article n'a pas été repris : la ligne reste, en texte libre. La perdre
             // fausserait le montant du document.
@@ -727,7 +746,7 @@ class MigrationSupplierOrder extends AeroMigrationRunner
     protected function validateRow($row)
     {
         $piece        = trim((string) $row->DO_Piece);
-        $supplierCode = trim((string) $row->DO_Tiers);
+        $supplierCode = $this->indexKey($row->DO_Tiers);
 
         if (!isset($this->supplierBySage[$supplierCode])) {
             $this->missingSuppliers++;
@@ -762,7 +781,7 @@ class MigrationSupplierOrder extends AeroMigrationRunner
      */
     protected function previewAction($row, $existingId)
     {
-        if (!isset($this->supplierBySage[trim((string) $row->DO_Tiers)])) {
+        if (!isset($this->supplierBySage[$this->indexKey($row->DO_Tiers)])) {
             return 'skipped';
         }
 

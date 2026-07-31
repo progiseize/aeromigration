@@ -32,6 +32,7 @@ php migrate.php supplierprice  tarifs fournisseurs → relient articles et tiers
 php migrate.php warehouse      entrepôts et emplacements
 php migrate.php stock          stocks → rattachés aux articles et aux entrepôts
 php migrate.php supplierorder  commandes fournisseur → relient tiers et articles
+php migrate.php customerorder  commandes clients → adopte celles de la boutique
 ```
 
 `warehouse` lit `f_emplacements`, **seule table du jeu source qui ne vienne pas de Sage** :
@@ -51,6 +52,7 @@ nouvelle instance.
 | `warehouse` | — | s'arrête si `f_emplacements` ou le dépôt principal sont absents |
 | `stock` | `product`, `warehouse` | s'arrête si l'entrepôt principal est absent ; les lignes sans article repris sont ignorées et dénombrées |
 | `supplierorder` | `thirdparty`, `product` | les commandes dont le fournisseur n'est pas repris sont écartées et dénombrées ; les lignes sans article deviennent du texte libre |
+| `customerorder` | `thirdparty`, `product` | idem, et les commandes déjà créées par la boutique sont adoptées au lieu d'être recréées |
 
 Les deux derniers restent tolérants. Un article sans catégorie demeure un article valide, et
 l'on peut vouloir reprendre les produits seuls ; le rapport indique alors clairement
@@ -84,6 +86,15 @@ transaction, et les enregistrements déjà repris sont reconnus à leur `ref_ext
 la même commande suffit, l'option `--cursor` permettant d'aller plus vite si l'on a noté
 la dernière valeur affichée.
 
+L'option `--filter` restreint la lecture à un sous-ensemble, sans jamais l'élargir : la
+condition est ajoutée à celle du script. Elle sert aux rattrapages ciblés, et surtout à
+reprendre d'une instance à l'autre exactement le même échantillon, seul moyen de comparer
+une reprise locale à une reprise en ligne client par client.
+
+```
+php migrate.php customerorder --dry-run --filter="DO_Tiers IN ('100568','110441')"
+```
+
 ## Rapprochement avec la boutique en ligne
 
 La cible n'est pas vierge : le module Prestasync y crée des tiers venus de PrestaShop. La
@@ -102,6 +113,42 @@ C'est la **seule écriture SQL directe** du module, à rebours de la règle gén
 assumée : `PrestaCustomer::setCustomDolLink()` n'exécute qu'un `INSERT` sans traitement
 annexe, et passer par la classe imposerait d'ouvrir une connexion webservice vers la
 boutique pour chacun des ~135 000 tiers.
+
+## Les commandes clients, quand la boutique les a déjà créées
+
+Prestasync crée dans Dolibarr les commandes venues du site, et la source les contient aussi.
+Les recréer donnerait **deux commandes pour chaque vente en ligne**. `customerorder` les
+reconnaît donc et se contente de poser leur `ref_ext` : ni renommées, ni remaniées, la
+boutique restant leur source.
+
+Le rapprochement se fait sur la référence de la boutique, que la source enregistre de deux
+façons selon l'époque :
+
+| Document source | `DO_NoWeb` | Référence retenue |
+|---|---|---|
+| `CI-251029` | `251029` | `251029` |
+| `CI-261866` | `UJGSMDLHX` | `UJGSMDLHX` |
+| `CI-210251` | *(vide)* | `210251`, tiré du numéro |
+| `C990000777` | *(vide)* | `C990000777`, saisie interne |
+
+La convention a changé en septembre 2022 : avant, seule la partie numérique du numéro portait
+la référence ; ensuite `DO_NoWeb` l'enregistre, **et 3 333 fois elle diffère du numéro**. Les
+deux voies sont donc nécessaires.
+
+**La référence donnée en cible est celle que la boutique donnerait**, et ce n'est pas
+cosmétique : Prestasync vérifie l'existence d'une commande avant de la créer, sur `ref`
+(`prestaOrder.class.php:622`). Une commande reprise sous ce nom est reconnue par la boutique,
+qui refusera de la recréer — la protection joue à chaque synchronisation ultérieure, pas
+seulement au moment de la reprise.
+
+159 documents visent la même référence, dont 22 partageant un `DO_NoWeb` valant `1` : la
+première la prend, les suivantes reçoivent leur numéro de document, unique par construction.
+
+> **Ce qui ne se teste pas en local.** L'adoption suppose des commandes créées par la
+> boutique ; il n'y en a aucune sur une instance de développement. La conception s'est
+> corrigée trois fois, chaque fois en comparant un client nommé entre les deux instances.
+> Avant d'écrire quoi que ce soit en production, lancer un `--dry-run` et **regarder le
+> compteur « adoptés »** : c'est lui qui dit si le rapprochement fonctionne.
 
 ## Idempotence : `ref_ext`, et `import_key` par exception
 

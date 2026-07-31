@@ -256,6 +256,20 @@ abstract class AeroMigrationRunner
      */
     public $referenceDate = 0;
 
+    /**
+     * Condition SQL ajoutée au filtre de lecture du script.
+     *
+     * Posée par l'option `--filter` du lanceur. Elle ne peut que restreindre la portée de
+     * `$srcWhere`, jamais l'élargir : les deux sont combinées par un ET.
+     *
+     * Sert à reprendre un sous-ensemble comparable d'une instance à l'autre — c'est le seul
+     * moyen de confronter une reprise locale à une reprise en ligne sans rejouer l'ensemble —
+     * ainsi qu'aux rattrapages ciblés.
+     *
+     * @var string
+     */
+    public $extraWhere = '';
+
     // ── Résultats ──────────────────────────────────────────────────────────
 
     /**
@@ -439,6 +453,9 @@ abstract class AeroMigrationRunner
         if ($this->srcWhere !== '') {
             $conditions[] = '('.$this->srcWhere.')';
         }
+        if ($this->extraWhere !== '') {
+            $conditions[] = '('.$this->extraWhere.')';
+        }
         $cursorCondition = $this->buildCursorCondition($this->startCursor);
         if ($cursorCondition !== '') {
             $conditions[] = $cursorCondition;
@@ -536,6 +553,9 @@ abstract class AeroMigrationRunner
         $conditions = array();
         if ($this->srcWhere !== '') {
             $conditions[] = '('.$this->srcWhere.')';
+        }
+        if ($this->extraWhere !== '') {
+            $conditions[] = '('.$this->extraWhere.')';
         }
         $cursorCondition = $this->buildCursorCondition($cursor);
         if ($cursorCondition !== '') {

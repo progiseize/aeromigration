@@ -29,3 +29,4 @@ AeroMigScriptStock=Stocks
 AeroMigStatusDone=OK
 AeroMigStatusUnknown=Indéterminé
 AeroMigScriptSupplierOrder=Commandes fournisseur
+AeroMigScriptCustomerOrder=Commandes clients

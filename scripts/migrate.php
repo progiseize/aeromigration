@@ -20,12 +20,17 @@
  *   --update         Met à jour les objets déjà migrés au lieu de les ignorer
  *   --user=LOGIN     Utilisateur au nom duquel créer les objets (défaut : 1er admin)
  *   --date=AAAA-MM-JJ  Date des écritures qui n'en ont pas dans la source
+ *   --filter="SQL"   Condition ajoutée au filtre de lecture, pour reprendre un
+ *                    sous-ensemble : mise au point, échantillon de contrôle,
+ *                    rattrapage ciblé. La condition porte sur les colonnes de la
+ *                    table source, sans préfixe.
  *
  * Exemples :
  *   php migrate.php thirdparty --dry-run
  *   php migrate.php thirdparty --limit=50
  *   php migrate.php thirdparty --cursor=48120
  *   php migrate.php stock --date=2026-08-01
+ *   php migrate.php customerorder --filter="DO_Tiers IN ('36333','12045')"
  */
 
 if (!defined('NOTOKENRENEWAL')) {
@@ -73,6 +78,7 @@ $dryrun         = false;
 $limit          = 0;
 $batch          = 200;
 $cursor         = null;
+$filter         = '';
 $updateExisting = false;
 $userLogin      = '';
 $referenceDate  = 0;
@@ -104,6 +110,17 @@ for ($i = 1; $i < $argc; $i++) {
             echo "Date non exploitable : ".$m[1].'-'.$m[2].'-'.$m[3]."\n";
             exit(1);
         }
+    } elseif (preg_match('/^--filter=(.*)$/s', $arg, $m)) {
+        // Restreint la lecture à un sous-ensemble de la source. Sert à reprendre un
+        // échantillon comparable à celui d'une autre instance, ou à rattraper des lignes
+        // précises sans rejouer l'ensemble. La condition est concaténée au filtre du
+        // script : elle ne peut donc qu'en restreindre la portée, jamais l'élargir.
+        $filter = trim($m[1]);
+        if ($filter === '') {
+            echo "Le filtre est vide.
+";
+            exit(1);
+        }
     } elseif ($scriptCode === '' && substr($arg, 0, 2) !== '--') {
         $scriptCode = $arg;
     } else {
@@ -115,7 +132,8 @@ for ($i = 1; $i < $argc; $i++) {
 $scripts = aeromigrationGetScripts();
 
 if ($scriptCode === '') {
-    echo "Usage: php ".$script_file." <script> [--dry-run] [--limit=N] [--batch=N] [--cursor=N] [--update] [--user=LOGIN] [--date=AAAA-MM-JJ]\n\n";
+    echo "Usage: php ".$script_file." <script> [--dry-run] [--limit=N] [--batch=N] [--cursor=N]"
+        ." [--update] [--user=LOGIN] [--date=AAAA-MM-JJ] [--filter=\"SQL\"]\n\n";
     echo "Scripts disponibles :\n";
     if (empty($scripts)) {
         echo "  (aucun)\n";
@@ -181,6 +199,7 @@ $runner = new $definition['class']($db, $user);
 
 $runner->dryrun      = $dryrun;
 $runner->limit       = $limit;
+$runner->extraWhere  = $filter;
 $runner->batchSize   = $batch;
 $runner->startCursor = $cursor;
 

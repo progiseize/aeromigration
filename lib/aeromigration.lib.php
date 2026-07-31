@@ -122,5 +122,14 @@ function aeromigrationGetScripts()
             'class' => 'MigrationSupplierOrder',
             'file'  => '/aeromigration/class/migrationsupplierorder.class.php',
         ),
+        // Dépend des tiers ET des articles. Contrairement aux autres reprises, la cible
+        // n'est pas vierge : Prestasync y crée les commandes de la boutique, qui sont
+        // adoptées plutôt que recréées.
+        array(
+            'code'  => 'customerorder',
+            'label' => 'AeroMigScriptCustomerOrder',
+            'class' => 'MigrationCustomerOrder',
+            'file'  => '/aeromigration/class/migrationcustomerorder.class.php',
+        ),
     );
 }

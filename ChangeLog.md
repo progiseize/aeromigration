@@ -6,6 +6,126 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.10.0] — 2026-07-31
+
+### Ajouté
+
+- **Reprise des commandes clients** — `migrate.php customerorder`. 60 936 commandes et
+  200 010 lignes, de 2019 à 2026. Validée sur un échantillon de **3 116 commandes réparties
+  sur 102 tiers** — gros, moyens et petits clients — repris en 2 min 52 sans une erreur.
+
+  | | |
+  |---|---:|
+  | Commandes fermées, facturées dans l'ancien ERP | 2 932 |
+  | Commandes annulées | 138 |
+  | Commandes validées, sans suite | 46 |
+  | Lignes écrites | 15 014 |
+  | Montants identiques à la source | **3 048 / 3 081** |
+  | Écart total | **1,13 €** sur 1 576 079 € |
+
+  Les 33 écarts sont des arrondis de ligne. Les 3 116 références obtenues sont toutes uniques.
+
+- **Option `--filter="SQL"`** sur le lanceur, pour tous les scripts. Elle restreint la lecture
+  à un sous-ensemble — elle ne peut qu'ajouter une condition au filtre du script, jamais
+  l'élargir. C'est ce qui a permis de reprendre en local exactement les mêmes tiers qu'en
+  production et de comparer les deux instances client par client, sans rejouer les 60 936
+  commandes à chaque essai.
+
+#### L'adoption des commandes de la boutique
+
+La cible n'est pas vierge : Prestasync y crée les commandes venues du site, et la source les
+contient aussi. Les recréer donnerait **deux commandes pour chaque vente en ligne**. Elles
+sont donc reconnues, marquées d'un `ref_ext`, et laissées intactes — ni renommées, ni
+remaniées, la boutique restant leur source.
+
+**La clé de rapprochement a demandé trois corrections successives**, et aucune n'était visible
+en local. Elles méritent d'être détaillées, parce que le raisonnement qui menait à chacune
+paraissait solide.
+
+**1. `DO_NoWeb` semblait prévu pour cela** — 20 637 commandes en portent un. Mais la colonne
+est NULL sur les deux tiers des documents, et une capture d'écran comparant local et
+production a montré que les commandes concernées n'étaient pas celles qu'on croyait.
+
+**2. Prestasync écrit la référence de la boutique dans `ref`** — pas dans une table de liaison,
+qu'il prévoit pourtant et laisse vide :
+
+```php
+if ($resSearchRef === 0 && !getDolGlobalInt('PRESTASYNC_NO_USER_PRESTA_REF')) {
+    $this->doliObject->ref = $this->reference;                  // prestaOrder.class.php:634
+}
+```
+
+La source enregistre le même document sous `CI-<référence>` : la commande `235880` de la
+boutique est la commande `CI-235880` de la source. 54 700 des 60 936 portent ce préfixe.
+
+**3. Mais la convention a changé en septembre 2022.** Avant, la référence de la boutique
+n'était pas conservée et seul le numéro la portait ; après, `DO_NoWeb` l'enregistre — tantôt
+identique au numéro, tantôt alphanumérique :
+
+```
+CI-251029   DO_NoWeb = 251029       →  la boutique la nomme « 251029 »
+CI-261866   DO_NoWeb = UJGSMDLHX    →  la boutique la nomme « UJGSMDLHX »
+CI-210251   DO_NoWeb vide           →  repli sur le numéro, « 210251 »
+```
+
+**3 333 documents ont un `DO_NoWeb` qui diffère du numéro.** Se fier au seul numéro les aurait
+manqués — et leur aurait donné une référence que la boutique n'aurait pas reconnue.
+
+> **Ce que ces trois passes apprennent.** Aucune n'était détectable depuis la base locale : il
+> a fallu, chaque fois, comparer un client précis entre les deux instances. Quand la cible
+> d'une reprise contient déjà des données produites par un autre système, **la conception ne
+> se valide pas en local** — elle se valide en confrontant les deux, sur des cas nommés.
+
+#### La référence reprise est celle que la boutique donnerait
+
+Une commande web est nommée `235880` et non `CI-235880`. Ce n'est pas cosmétique : Prestasync
+vérifie l'existence d'une commande avant de la créer, et il le fait sur la référence
+(`prestaOrder.class.php:622`). Une commande reprise sous le nom que la boutique lui donnerait
+est donc reconnue par elle, qui refusera de la recréer. **La protection joue dans les deux
+sens** — pas seulement au moment de la reprise, mais à chaque synchronisation ultérieure.
+
+Les 6 236 documents des autres formats — `C99…`, `C02…`, `OR…` — sont des saisies internes
+sans équivalent en ligne : ils gardent leur numéro d'origine.
+
+**159 documents visent la même référence**, dont 22 partageant un `DO_NoWeb` valant `1`. La
+première la prend, les suivantes reçoivent leur numéro de document, unique par construction.
+Les références déjà présentes en base sont réservées au démarrage, ce qui évite de buter sur
+`uk_commande_ref` au moment de la validation.
+
+#### Deux défauts corrigés en cours de route
+
+**La casse des références.** Une requête de contrôle annonçait 177 articles introuvables, le
+script en trouvait **36 050** : la source écrit les frais de port tantôt `PortSTD`, tantôt
+`PORTSTD`, et **MySQL compare sans tenir compte de la casse là où PHP compare des clés de
+tableau à l'identique**. 37 877 lignes concernées. Les index sont désormais normalisés en
+minuscules — vérifié qu'aucune collision n'en résulte, les 15 811 références des produits
+restent 15 811. Le même défaut a été corrigé dans la reprise des commandes fournisseur.
+
+**`Not for sale`.** Comme côté achats, `valid()` refuse un document portant un article dont
+`tosell` vaut 0, et 1 076 des articles repris sont arrêtés.
+`ORDER_NOCHECK_ONSALE_PRODUCTS_ONVALID` est posée en mémoire du processus, jamais en base.
+
+#### Choix de reprise
+
+- **Statuts** : `Z_Annule` pour l'annulation, chaînage `DL_PieceBC` vers les factures pour la
+  clôture. Une commande fermée est en outre classée « facturée », sans quoi elle resterait
+  dans la liste des commandes à facturer — 59 231 entrées qui n'auraient aucun sens.
+- **Performance** : `addline()` recalcule les totaux du document à chaque appel si on ne l'en
+  empêche pas (`commande.class.php:1829`). Le recalcul est reporté à la fin de chaque
+  commande, un seul `update_price()` par document.
+- **Les 22 documents sans tiers** sont écartés dès la lecture : une commande client sans
+  client n'a pas de sens en cible, et le socle les compterait en erreur à chaque passage.
+- **Lignes conservées en texte libre** : 1 890 sans référence article, 175 dont l'article n'est
+  pas repris. Les perdre fausserait le montant du document.
+
+### Reste à valider en production
+
+**L'adoption n'a pas pu être testée sur données réelles** : `llx_prestasync_order` est vide en
+local et aucune commande de la boutique n'y existe. Le mécanisme n'a été vérifié que sur deux
+commandes simulées. Le `--dry-run` en ligne, et son compteur « adoptés », est le contrôle qui
+décide — avant toute écriture.
+
+
 ## [0.9.0] — 2026-07-31
 
 ### Ajouté
