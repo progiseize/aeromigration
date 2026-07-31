@@ -8,6 +8,16 @@ et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [0.10.0] — 2026-07-31
 
+### Sécurité
+
+- **`data/` était servi par le serveur web**, sans aucune protection. Le dossier contient le
+  script de création des emplacements, et sert de point de dépôt aux exports le temps d'un
+  import : un dump de l'historique commercial y aurait été téléchargeable par quiconque en
+  connaissait l'URL. Un `.htaccess` l'interdit désormais, dans les deux syntaxes d'Apache.
+
+  Le réflexe vaut au-delà de ce dossier : **tout ce qui est déposé sous `htdocs/` est public
+  par défaut**, y compris le temps d'une manipulation qu'on croit brève.
+
 ### Ajouté
 
 - **Reprise des commandes clients** — `migrate.php customerorder`. 60 936 commandes et
@@ -117,6 +127,19 @@ restent 15 811. Le même défaut a été corrigé dans la reprise des commandes 
   client n'a pas de sens en cible, et le socle les compterait en erreur à chaque passage.
 - **Lignes conservées en texte libre** : 1 890 sans référence article, 175 dont l'article n'est
   pas repris. Les perdre fausserait le montant du document.
+
+#### Un compteur qui se contredisait
+
+Le premier essai en production a révélé un défaut d'affichage : la ligne de progression
+annonçait « créés 11, adoptés 0 » quand le rapport comptait 10 adoptions. Le socle appelle
+`validateRow()` **puis** `previewAction()` sur la même ligne ; or la première consomme la
+référence de boutique — sans quoi plusieurs documents la partageant adopteraient la même
+commande — et la seconde ne la retrouvait donc plus.
+
+Le rapport disait vrai, le compteur mentait. Sur le run complet, il aurait annoncé 60 936
+créations là où des milliers de commandes sont en réalité adoptées : de quoi faire renoncer
+à lancer, ou pire, croire à un doublon massif. La décision est désormais prise une fois par
+`validateRow()` et relue, plutôt que recalculée sur un index modifié entre-temps.
 
 ### Reste à valider en production
 

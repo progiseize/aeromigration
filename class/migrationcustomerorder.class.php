@@ -135,6 +135,22 @@ class MigrationCustomerOrder extends AeroMigrationRunner
     /** @var array<string,bool> Références déjà attribuées, pour garantir l'unicité */
     protected $usedRefs = array();
 
+    /**
+     * Décision prise en simulation, par document.
+     *
+     * Le socle appelle `validateRow()` **puis** `previewAction()` sur la même ligne
+     * (aeromigrationrunner.class.php:676). Or la première consomme la référence de boutique
+     * — sans quoi plusieurs documents partageant une référence adopteraient la même commande
+     * — et la seconde ne la retrouverait donc plus : elle annonçait « créée » ce qui venait
+     * d'être compté comme adopté.
+     *
+     * La décision est prise une fois et relue, plutôt que recalculée sur un index modifié
+     * entre-temps.
+     *
+     * @var array<string,string>
+     */
+    protected $previewDecisions = array();
+
     /** @var int Documents dont la référence souhaitée était déjà prise */
     protected $refCollisions = 0;
 
@@ -911,6 +927,7 @@ class MigrationCustomerOrder extends AeroMigrationRunner
         if ($shopRef !== '' && isset($this->ordersByShopRef[$shopRef])) {
             $this->adopted++;
             $this->consumeShopRef($shopRef);
+            $this->previewDecisions[$piece] = 'adopted';
             return;
         }
 
@@ -918,8 +935,11 @@ class MigrationCustomerOrder extends AeroMigrationRunner
         if (!isset($this->customerBySage[$customerCode])) {
             $this->missingCustomers++;
             $this->missingCustomerCodes[$customerCode] = true;
+            $this->previewDecisions[$piece] = 'skipped';
             return;
         }
+
+        $this->previewDecisions[$piece] = 'created';
 
         $this->resolveCurrency($row);
         $this->resolveRef($row);
@@ -957,13 +977,12 @@ class MigrationCustomerOrder extends AeroMigrationRunner
             return 'skipped';
         }
 
-        $shopRef = $this->shopRef($row);
-        if ($shopRef !== '' && isset($this->ordersByShopRef[$shopRef])) {
-            return 'adopted';
-        }
-
-        if (!isset($this->customerBySage[$this->indexKey($row->DO_Tiers)])) {
-            return 'skipped';
+        // La décision a été prise par validateRow(), qui s'exécute juste avant : la
+        // recalculer ici donnerait un autre résultat, l'index des commandes de la boutique
+        // ayant été modifié entre-temps.
+        $piece = trim((string) $row->DO_Piece);
+        if (isset($this->previewDecisions[$piece])) {
+            return $this->previewDecisions[$piece];
         }
 
         return 'created';
