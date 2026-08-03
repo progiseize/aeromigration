@@ -6,6 +6,132 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.11.0] — 2026-08-03
+
+L'**emplacement de stockage cesse d'être un entrepôt**, et la reprise s'appuie désormais sur
+l'export intégral livré par l'éditeur.
+
+### Les emplacements quittent les entrepôts
+
+Sept cent dix-neuf sous-entrepôts avaient été créés pour un dépôt réel, un par emplacement de
+rangement. Chaque sélecteur d'entrepôt en était encombré, un déplacement d'étagère devenait un
+transfert de stock, et les états par entrepôt n'étaient plus lisibles.
+
+L'emplacement n'est pas une unité de gestion de stock. L'entrepôt dit **combien**, l'emplacement
+dit **où** — deux questions distinctes, désormais portées séparément.
+
+Deux scripts nouveaux, qui s'appuient sur le dictionnaire et le champ produit ajoutés par
+`aerotoolbox` 1.5.0 :
+
+| Script | Source | Résultat |
+|---|---|---|
+| `location` | `f_depotempl` | 866 emplacements dans le dictionnaire |
+| `productlocation` | `f_artstock.DP_NoPrincipal` | 6 424 produits rangés |
+
+**La source est fusionnée sur l'intitulé** : 1 007 lignes pour 866 emplacements distincts.
+« BOUTIQUE » y figure huit fois, « S1-A11-2 » sept fois, sous des numéros différents — ce sont
+des saisies répétées du même endroit, et les reprendre telles quelles donnerait huit entrées
+indiscernables dans la liste déroulante.
+
+**Trois défauts de la source, traités et signalés.** `DP_Code` est inexploitable : tronqué à
+treize caractères (« STOCK SECURIS » pour « STOCK SECURISE ») et corrompu sur treize lignes, où
+il vaut `<input type=`. C'est `DP_Intitule` qui sert de clé. Trois intitulés ne contiennent eux
+aussi que ce fragment HTML : ils sont repris sous leur numéro d'origine, ce qui les garde
+**distincts** — un repli commun les aurait fusionnés et aurait envoyé au même endroit des
+articles rangés à trois places différentes. Cinq intitulés portent un « ? » à la place d'une
+lettre accentuée ; rien n'est deviné, le rapport les liste pour correction.
+
+Le rapport signale aussi les **quatre-vingts groupes d'emplacements qui ne diffèrent que par
+leur ponctuation** — « STOCK SECURISE » et « STOCK-SECURISE ». Ils ne sont pas fusionnés : sur
+un code d'allée, « M1-A2-3 » et « M1-A23 » ne désignent pas forcément le même rayonnage, et une
+fusion à tort égarerait des articles sans laisser de trace, quand deux entrées en trop se
+corrigent d'un clic.
+
+### Une base source à part
+
+L'éditeur a livré son dossier entier — 347 tables, 3,2 Go — là où les premiers travaux
+s'appuyaient sur une vingtaine de tables importées à côté des `llx_*`. Les recopier dans la base
+de Dolibarr y verserait plusieurs gigaoctets qui n'ont rien à y faire.
+
+Le socle reçoit donc `$sourceDb` et un helper `src()`, et le lanceur l'option **`--source-db`**.
+Laissée vide, rien ne change pour les scripts écrits avant elle.
+
+Ce n'est pas qu'une commodité : l'export est plus récent, et l'écart compte. Sur `f_artstock`,
+**1 401 quantités diffèrent et 97 articles s'ajoutent**. Les scripts `warehouse`, `stock`,
+`location` et `productlocation` lisent la nouvelle base ; les autres restent sur l'ancienne tant
+qu'ils n'ont pas été éprouvés dessus.
+
+Un script d'import accompagne le tout : **`scripts/import_add_csv.php`** construit la base depuis
+les CSV, en déduisant le schéma quand il n'est pas déjà connu.
+
+### `stock` — tout dans le dépôt
+
+`resolveWarehouse()` retourne l'entrepôt principal, sans condition. La ventilation par marqueur,
+la résolution par libellé et l'entrepôt « À localiser » disparaissent, avec les index qui les
+servaient.
+
+Le régime de transfert est conservé et prend un sens nouveau : c'est lui qui **rapatrie le stock
+des anciens sous-entrepôts** sur une instance reprise avant cette version.
+
+Le rapport gagne un bloc **« Stock resté ailleurs »**. Le rapatriement ne porte que sur les
+produits lus, et le filtre écarte les lignes entièrement à zéro : un article vendu depuis la
+copie de la source s'y trouve à zéro alors qu'il porte encore du stock en base. Rare, mais il
+faut le savoir avant de supprimer l'entrepôt qui le contient — voir ci-dessous.
+
+### `warehouse` — un dépôt, un entrepôt
+
+Le script lit `f_depot` et non plus `f_emplacements`. Le dépôt 999 « Siege boutique.aero » est
+écarté : ce n'est pas un lieu de stockage mais une écriture technique, dont les 11 826 lignes de
+stock sont à zéro.
+
+L'adoption d'un entrepôt préexistant et le marquage `SAGE:DEPOT1` sont conservés — c'est ce dont
+`stock` et `location` dépendent pour savoir où travailler.
+
+`purge.php` reçoit **`--legacy`**, qui ne supprime que les sous-entrepôts hérités. Sans elle, la
+purge emporterait aussi l'entrepôt du dépôt, qui porte maintenant tout le stock et auquel les
+866 emplacements sont rattachés.
+
+### Un piège du coeur, corrigé dans notre documentation
+
+Nous avons d'abord écrit que Dolibarr refuse de supprimer un entrepôt qui porte du stock. **C'est
+l'inverse.** `Entrepot::delete()` ne vérifie rien et supprime lui-même `product_batch`,
+`stock_mouvement` puis `product_stock` avant l'entrepôt (entrepot.class.php:458-481). Le stock
+disparaît, et son historique de mouvements avec — donc sans trace permettant de savoir ce qui a
+été perdu. Aucun message, la suppression réussit.
+
+Constaté en supprimant les 726 sous-entrepôts : douze unités se sont évaporées. Documenté en
+**P8** dans `ANOMALIES.md`, avec l'avertissement reporté dans `purge.php warehouse` et dans le
+rapport de `stock`.
+
+À noter : `llx_product.stock` tombe alors à `NULL`, que Dolibarr traite comme zéro. Un contrôle
+écrit `p.stock <> (SELECT SUM(reel) …)` ne remonte rien, la comparaison avec `NULL` étant
+elle-même `NULL`. Il faut `COALESCE(p.stock, 0)`.
+
+### Ordre d'exécution
+
+```
+thirdparty → contact → newsletter → category → product → supplierprice
+→ warehouse → location → stock → productlocation
+→ supplierorder → customerorder
+```
+
+`location` doit précéder `productlocation`, et `warehouse` les deux : les emplacements se
+rattachent à l'entrepôt du dépôt.
+
+### Reprendre une instance migrée avec l'ancien modèle
+
+```
+migrate.php warehouse            # adopte le dépôt, ne crée plus de sous-entrepôt
+migrate.php location             # remplit le dictionnaire
+migrate.php stock                # rapatrie tout dans le dépôt — lire « Stock resté ailleurs »
+purge.php warehouse --legacy --confirm   # supprime les vestiges
+migrate.php productlocation      # range les produits
+```
+
+Éprouvé de bout en bout : 726 sous-entrepôts supprimés, un seul entrepôt restant, 5 641 lignes de
+stock pour 164 871 unités, aucune ligne de stock, d'emplacement ni de mouvement orpheline.
+
+
 ## [0.10.0] — 2026-07-31
 
 ### Sécurité
@@ -17,6 +143,28 @@ et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
   Le réflexe vaut au-delà de ce dossier : **tout ce qui est déposé sous `htdocs/` est public
   par défaut**, y compris le temps d'une manipulation qu'on croit brève.
+
+### Corrigé
+
+- **Un produit existant pouvait être invisible au script tout en bloquant sa création.**
+  `migrationproduct` indexait les références en cible à l'identique, alors que Dolibarr compare
+  sans tenir compte de la casse. Un article `EMBALLAGE` dans la source, saisi `Emballage` en
+  cible, n'était donc pas reconnu : le script tentait de le créer, et le coeur refusait sur
+  `ErrorProductAlreadyExists`.
+
+  Un seul article concerné en production — mais le plus utilisé du jeu, présent sur **754
+  lignes de commande** qui se retrouvaient toutes sans produit rattaché. C'est ce qui a fait
+  passer le compteur d'articles introuvables de 175 en local à 926 en ligne, et c'est en
+  cherchant cet écart qu'il a été trouvé.
+
+  Les index sont désormais normalisés. Aucune collision n'en résulte, et il ne peut pas y en
+  avoir : l'unicité étant elle-même insensible à la casse côté base, deux références n'en
+  différant que par elle ne peuvent pas coexister.
+
+  > **Troisième occurrence du même piège** dans ce module, après les commandes fournisseur et
+  > les commandes clients. La règle à retenir : **tout index PHP construit sur une valeur
+  > venue de MySQL doit être normalisé**, sans quoi une requête de contrôle et le script
+  > donneront des résultats différents — et c'est la requête qu'on croira.
 
 ### Ajouté
 

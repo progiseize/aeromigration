@@ -37,33 +37,44 @@
  * socle qui appellent `getEntity()` — `loadMigratedIndex()` et `purge()` — sont donc l'un
  * et l'autre surchargés. Ce n'est pas un oubli.
  *
+ * ## Un seul entrepôt, et les emplacements ailleurs
+ *
+ * Une première version rangeait chaque ligne dans le sous-entrepôt correspondant à son
+ * emplacement d'origine — sept cent dix-neuf entrepôts pour un dépôt réel. Le client ne
+ * gère qu'un entrepôt : l'emplacement est pour lui un repère de rangement, pas une unité
+ * de gestion de stock.
+ *
+ * Tout le stock va donc dans l'entrepôt principal, celui que la reprise des entrepôts a
+ * marqué `SAGE:DEPOT1`. L'emplacement d'origine n'est pas perdu pour autant : le script
+ * `productlocation` le porte sur la fiche produit, dans le dictionnaire des emplacements
+ * d'aerotoolbox. Les deux informations sont séparées parce qu'elles répondent à deux
+ * questions distinctes — **combien** pour l'entrepôt, **où** pour l'emplacement.
+ *
  * ## Deux régimes, choisis ligne par ligne
  *
- * La cible n'est pas toujours vierge. Sur l'instance de production, PrestaShop tient son
- * stock de l'ancien ERP et le module Prestasync l'a déjà poussé dans Dolibarr : 5 559
- * articles repris y portaient 172 965 unités, contre 167 830 dans la photo — 96,4 % de
- * concordance exacte. Le stock **est** celui de l'ancien ERP, simplement plus récent, et
- * tout entier dans un seul entrepôt faute d'emplacement connu de la boutique.
- *
- * Poser la photo par-dessus aurait doublé le stock. Le script regarde donc, pour chaque
- * ligne, si le produit porte déjà du stock :
+ * La cible n'est pas toujours vierge : Prestasync pousse dans Dolibarr le stock que la
+ * boutique tient de l'ancien ERP. Poser la photo par-dessus le doublerait. Le script
+ * regarde donc, pour chaque ligne, si le produit porte déjà du stock :
  *
  * - **rien en place** → mouvement d'ouverture, code `SAGE:OUVERTURE` ;
- * - **du stock en place** → **relocalisation** vers l'emplacement de la source, code
- *   `SAGE:RELOCALISATION`, sans jamais toucher aux quantités.
+ * - **du stock ailleurs que dans l'entrepôt principal** → **transfert** vers celui-ci,
+ *   code `SAGE:RELOCALISATION`, sans jamais toucher aux quantités ;
+ * - **du stock déjà dans l'entrepôt principal** → rien, la ligne est comptée en place.
  *
  * Le choix est fait ligne par ligne et non par une option de ligne de commande : c'est ce
  * qui garantit qu'un lancement de trop ne double rien, quel que soit l'état de la cible.
+ * Le régime de transfert garde tout son sens après l'abandon des sous-entrepôts : c'est
+ * lui qui rapatrie le stock d'une instance déjà reprise dans l'ancien modèle.
  *
  * **Les quantités ne sont pas alignées sur la photo, et c'est une décision.** La quantité
- * en place vient du système vivant, la photo d'une copie datée ; les 568 écarts constatés
- * sont des ventes et des réceptions postérieures. Le script les dénombre et cite les plus
- * gros, sans les corriger — voir ANOMALIES.md S11.
+ * en place vient du système vivant, la photo d'une copie datée ; les écarts constatés sont
+ * des ventes et des réceptions postérieures. Le script les dénombre et cite les plus gros,
+ * sans les corriger — voir ANOMALIES.md S11.
  *
  * Un transfert est une **paire** de mouvements de types 0 et 1, comme le fait l'écran natif
  * de déplacement en masse (massstockmove.php:230) : ce n'est ni une entrée ni une sortie de
  * l'entreprise, et les types 3 et 2 y donneraient un contresens comptable. Le prix n'est
- * porté que sur l'entrée dans l'emplacement de destination, ce qui **valorise le stock au
+ * porté que sur l'entrée dans l'entrepôt de destination, ce qui **valorise le stock au
  * passage** : les mouvements de Prestasync ayant un prix nul, le coût moyen était resté à
  * zéro, et `_create()` prend `$newpmp = $price` dès lors que l'ancien est nul (ligne 588).
  */
@@ -79,6 +90,18 @@ class MigrationStock extends AeroMigrationRunner
 
     /** @var string Clé de traduction du libellé */
     public $label = 'AeroMigScriptStock';
+
+    /**
+     * Base où lire la source.
+     *
+     * L'export intégral de l'éditeur, chargé à part, est plus récent que les tables
+     * importées lors des premiers travaux : 1 401 quantités y diffèrent et 97 articles s'y
+     * ajoutent. Lire l'ancienne copie poserait un stock périmé, et incohérent avec les
+     * emplacements que `productlocation` tire de la même base. Modifiable par --source-db.
+     *
+     * @var string
+     */
+    public $sourceDb = 'aeroprod';
 
     /** @var string Table source */
     protected $srcTable = 'f_artstock';
@@ -138,25 +161,26 @@ class MigrationStock extends AeroMigrationRunner
     /** @var int Nombre d'écarts de quantité cités nominativement au rapport */
     const GAPS_LISTED = 10;
 
+    /**
+     * Table rase : vider tout le stock plutôt que défaire la seule reprise.
+     *
+     * Posée par l'option `--all` du lanceur de purge. À n'employer qu'avant la mise en
+     * service : elle efface aussi ce que d'autres canaux ont posé.
+     *
+     * @var bool
+     */
+    public $purgeAll = false;
+
     // ── Index chargés au démarrage ─────────────────────────────────────────
 
     /** @var array<string,array{id:int,ref:string,type:int}> AR_Ref -> produit Dolibarr */
     protected $productBySage = array();
 
-    /** @var array<string,int> import_key -> rowid d'entrepôt */
-    protected $warehouseByImportKey = array();
-
-    /** @var array<string,int> Libellé normalisé -> rowid d'entrepôt */
-    protected $warehouseByLabel = array();
-
-    /** @var int rowid de l'entrepôt principal */
+    /** @var int rowid de l'entrepôt principal, seule destination du stock repris */
     protected $mainWarehouseId = 0;
 
-    /** @var int rowid de l'entrepôt « À localiser » */
-    protected $orphanWarehouseId = 0;
-
-    /** @var array<int,string> Numéro d'emplacement -> libellé */
-    protected $locationLabels = array();
+    /** @var string Référence de cet entrepôt, pour le rapport */
+    protected $mainWarehouseRef = '';
 
     /** @var array<string,float> AR_Ref -> coût de valorisation retenu */
     protected $costBySage = array();
@@ -184,9 +208,6 @@ class MigrationStock extends AeroMigrationRunner
 
     /** @var array<int,string> rowid d'entrepôt -> libellé, pour les libellés de transfert */
     protected $warehouseRefById = array();
-
-    /** @var array<string,int> Résolutions d'entrepôt déjà faites, pour ne compter qu'une fois */
-    protected $warehouseResolved = array();
 
     // ── Compteurs de rapport ───────────────────────────────────────────────
 
@@ -232,18 +253,6 @@ class MigrationStock extends AeroMigrationRunner
     /** @var array<int,array{ref:string,sage:float,current:float}> Les plus gros écarts */
     protected $gapSamples = array();
 
-    /** @var int Lignes placées dans leur sous-entrepôt par le marqueur */
-    protected $byMarker = 0;
-
-    /** @var int Lignes dont l'emplacement avait été fusionné, retrouvé par libellé */
-    protected $byLabel = 0;
-
-    /** @var int Lignes sans emplacement d'origine */
-    protected $noLocation = 0;
-
-    /** @var array<int,bool> Emplacements supprimés dans l'ancien ERP, rencontrés */
-    protected $deletedLocations = array();
-
     /** @var int Lignes venues pour leurs seuls seuils */
     protected $thresholdOnly = 0;
 
@@ -272,6 +281,18 @@ class MigrationStock extends AeroMigrationRunner
     protected $discarded = array();
 
     /**
+     * Produits que ce passage a pris en charge.
+     *
+     * Sert au seul bloc « Stock resté ailleurs », qui doit dire ce qui subsistera **après**
+     * le passage et non ce qui traîne avant. En simulation, rien n'ayant encore bougé, la
+     * requête compterait sinon comme resté sur place tout ce que la reprise s'apprête à
+     * rapatrier — soit la quasi-totalité du stock sur une instance déjà reprise.
+     *
+     * @var array<int,bool>
+     */
+    protected $handledProducts = array();
+
+    /**
      * Charge tout ce dont la reprise a besoin.
      *
      * @return int 1 si OK, -1 en cas d'erreur
@@ -281,7 +302,6 @@ class MigrationStock extends AeroMigrationRunner
         foreach (array(
             'loadProductIndex',
             'loadWarehouseIndex',
-            'loadLocationLabels',
             'loadArticleIndex',
             'loadStockIndex',
             'countDiscarded',
@@ -330,11 +350,12 @@ class MigrationStock extends AeroMigrationRunner
     }
 
     /**
-     * Index des entrepôts, par marqueur de reprise et par libellé.
+     * Index des entrepôts et repérage de l'entrepôt principal.
      *
-     * Les deux sont nécessaires : le script `warehouse` a fusionné 93 emplacements
-     * homonymes, qui n'ont donc pas leur propre entrepôt et ne se retrouvent que par leur
-     * libellé.
+     * Tous les entrepôts sont lus, mais seul le principal reçoit du stock. Les autres ne
+     * servent qu'à nommer l'origine d'un transfert au rapport : sur une instance déjà
+     * reprise dans l'ancien modèle, le stock à rapatrier vient de sept cents sous-entrepôts
+     * dont il faut pouvoir citer le nom.
      *
      * @return int 1 si OK, -1 en cas d'erreur
      */
@@ -349,20 +370,17 @@ class MigrationStock extends AeroMigrationRunner
             return -1;
         }
 
+        $mainKey = $this->buildRefExt('DEPOT1');
+
         while ($obj = $this->db->fetch_object($resql)) {
-            if (!empty($obj->import_key)) {
-                $this->warehouseByImportKey[(string) $obj->import_key] = (int) $obj->rowid;
+            $this->warehouseRefById[(int) $obj->rowid] = (string) $obj->ref;
+
+            if ((string) $obj->import_key === $mainKey) {
+                $this->mainWarehouseId  = (int) $obj->rowid;
+                $this->mainWarehouseRef = (string) $obj->ref;
             }
-            $this->warehouseByLabel[$this->labelKey($obj->ref)] = (int) $obj->rowid;
-            $this->warehouseRefById[(int) $obj->rowid]          = (string) $obj->ref;
         }
         $this->db->free($resql);
-
-        $mainKey   = $this->buildRefExt('DEPOT1');
-        $orphanKey = $this->buildRefExt('ORPHELIN');
-
-        $this->mainWarehouseId   = isset($this->warehouseByImportKey[$mainKey]) ? $this->warehouseByImportKey[$mainKey] : 0;
-        $this->orphanWarehouseId = isset($this->warehouseByImportKey[$orphanKey]) ? $this->warehouseByImportKey[$orphanKey] : 0;
 
         // Seule dépendance dure du script : sans entrepôt, aucun mouvement n'est possible.
         if ($this->mainWarehouseId <= 0) {
@@ -373,31 +391,6 @@ class MigrationStock extends AeroMigrationRunner
             );
             return -1;
         }
-
-        return 1;
-    }
-
-    /**
-     * Libellés des emplacements de l'ancien ERP.
-     *
-     * @return int 1 si OK, -1 en cas d'erreur SQL
-     */
-    protected function loadLocationLabels()
-    {
-        $resql = $this->db->query('SELECT rowid, label FROM f_emplacements');
-        if (!$resql) {
-            $this->errors[] = array(
-                'key'     => '',
-                'message' => 'Table f_emplacements introuvable : rejouez data/f_emplacements.sql. ('
-                    .$this->db->lasterror().')',
-            );
-            return -1;
-        }
-
-        while ($obj = $this->db->fetch_object($resql)) {
-            $this->locationLabels[(int) $obj->rowid] = (string) $obj->label;
-        }
-        $this->db->free($resql);
 
         return 1;
     }
@@ -419,7 +412,7 @@ class MigrationStock extends AeroMigrationRunner
      */
     protected function loadArticleIndex()
     {
-        $resql = $this->db->query('SELECT AR_Ref, AR_CoutStd, AR_PrixRU, AR_SuiviStock FROM f_article');
+        $resql = $this->db->query('SELECT AR_Ref, AR_CoutStd, AR_PrixRU, AR_SuiviStock FROM '.$this->src('f_article'));
         if (!$resql) {
             $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
             return -1;
@@ -497,13 +490,13 @@ class MigrationStock extends AeroMigrationRunner
     {
         $queries = array(
             'sans référence article' => "SELECT COUNT(*) as nb, COALESCE(SUM(AS_QteSto),0) as qte"
-                ." FROM f_artstock WHERE DE_No = 1 AND TRIM(AR_Ref) = ''",
+                ." FROM ".$this->src('f_artstock')." WHERE DE_No = 1 AND TRIM(AR_Ref) = ''",
             'dépôt 999, toutes à zéro' => "SELECT COUNT(*) as nb, COALESCE(SUM(AS_QteSto),0) as qte"
-                ." FROM f_artstock WHERE DE_No = 999",
+                ." FROM ".$this->src('f_artstock')." WHERE DE_No = 999",
             'dépôt non déclaré' => "SELECT COUNT(*) as nb, COALESCE(SUM(AS_QteSto),0) as qte"
-                ." FROM f_artstock WHERE DE_No NOT IN (1, 999)",
+                ." FROM ".$this->src('f_artstock')." WHERE DE_No NOT IN (1, 999)",
             'stock en dépôt-vente (f_consigne)' => "SELECT COUNT(*) as nb, COALESCE(SUM(AS_QteSto),0) as qte"
-                ." FROM f_consigne",
+                ." FROM ".$this->src('f_consigne'),
         );
 
         foreach ($queries as $motif => $sql) {
@@ -581,20 +574,6 @@ class MigrationStock extends AeroMigrationRunner
     }
 
     /**
-     * Clé de comparaison d'un libellé d'entrepôt.
-     *
-     * Reproduit celle de MigrationWarehouse, elle-même calquée sur la collation de
-     * `uk_entrepot_label` : insensible à la casse et aux accents.
-     *
-     * @param string $label Libellé
-     * @return string       Clé de comparaison
-     */
-    protected function labelKey($label)
-    {
-        return strtolower(dol_string_unaccent(trim((string) $label)));
-    }
-
-    /**
      * Date des mouvements.
      *
      * @return int Timestamp
@@ -607,77 +586,29 @@ class MigrationStock extends AeroMigrationRunner
     /**
      * Entrepôt où poser le stock d'une ligne source.
      *
-     * Quatre cas, qui couvrent la totalité des lignes. Le marqueur de reprise est
-     * interrogé **avant** le libellé, et c'est indispensable : les emplacements dont le
-     * libellé était vide dans la source ont été créés sous le nom « Emplacement 512 », une
-     * résolution par libellé les manquerait.
+     * Toujours l'entrepôt principal. La méthode subsiste plutôt que d'écrire la propriété
+     * partout : elle marque l'endroit où une ventilation redeviendrait possible si le
+     * client ouvrait un second dépôt, et elle documente qu'il n'y en a pas aujourd'hui.
+     *
+     * L'emplacement d'origine, lui, n'est pas perdu : `productlocation` le porte sur la
+     * fiche produit. Le mélanger au stock reviendrait à faire d'un rangement une écriture.
      *
      * @param stdClass $row Ligne source
-     * @return int          rowid de l'entrepôt, 0 si non résolu
+     * @return int          rowid de l'entrepôt
      */
     protected function resolveWarehouse($row)
     {
-        // Mémorisé par ligne source, car la résolution tient les compteurs de ventilation :
-        // deux appels pour la même ligne — le mode simulation en fait un pour annoncer
-        // l'action et un pour la contrôler — les feraient compter double.
-        $cacheKey = trim((string) $row->AR_Ref).'|'.(int) $row->DP_NoPrincipal;
-        if (isset($this->warehouseResolved[$cacheKey])) {
-            return $this->warehouseResolved[$cacheKey];
-        }
-
-        $resolved = $this->computeWarehouse($row);
-        $this->warehouseResolved[$cacheKey] = $resolved;
-
-        return $resolved;
+        return $this->mainWarehouseId;
     }
 
     /**
-     * Résout l'entrepôt d'une ligne, et tient les compteurs de ventilation.
+     * Libellé du mouvement.
      *
-     * Séparée de `resolveWarehouse()` pour que le cache soit le seul point d'entrée : les
-     * compteurs doivent être incrémentés une fois par ligne source, pas une fois par appel.
-     *
-     * @param stdClass $row Ligne source
-     * @return int          rowid de l'entrepôt, 0 si non résolu
-     */
-    protected function computeWarehouse($row)
-    {
-        $no = (int) $row->DP_NoPrincipal;
-
-        // Aucun emplacement d'origine : l'article n'a jamais été rangé.
-        if ($no <= 0) {
-            $this->noLocation++;
-            return $this->mainWarehouseId;
-        }
-
-        $key = $this->buildRefExt((string) $no);
-        if (isset($this->warehouseByImportKey[$key])) {
-            $this->byMarker++;
-            return $this->warehouseByImportKey[$key];
-        }
-
-        // L'emplacement existe dans la source mais n'a pas son propre entrepôt : il a été
-        // fusionné avec un homonyme, Dolibarr imposant l'unicité du libellé.
-        if (isset($this->locationLabels[$no])) {
-            $labelKey = $this->labelKey($this->locationLabels[$no]);
-            if ($labelKey !== '' && isset($this->warehouseByLabel[$labelKey])) {
-                $this->byLabel++;
-                return $this->warehouseByLabel[$labelKey];
-            }
-            return 0;
-        }
-
-        // Emplacement supprimé dans l'ancien ERP : regroupé pour être retrouvé.
-        $this->deletedLocations[$no] = true;
-
-        return $this->orphanWarehouseId;
-    }
-
-    /**
-     * Libellé du mouvement, porteur de la provenance de la ligne.
-     *
-     * Le code d'inventaire étant constant, c'est le libellé qui répond à la question que
-     * le client se posera devant chaque ligne : d'où vient ce stock ?
+     * Le code d'inventaire est constant sur toute la reprise ; le libellé dit d'où vient
+     * la ligne. L'emplacement d'origine y figure encore, en clair : c'est la seule trace
+     * qu'en garde le mouvement, et elle répond à la question que le client se posera
+     * devant une ligne d'historique. Elle n'a aucune portée fonctionnelle — le rangement
+     * courant se lit sur la fiche produit, où il peut changer sans réécrire l'histoire.
      *
      * @param stdClass $row Ligne source
      * @return string       Libellé, au plus 255 caractères
@@ -689,18 +620,6 @@ class MigrationStock extends AeroMigrationRunner
 
         if ($no <= 0) {
             return $base.' — sans emplacement d\'origine';
-        }
-
-        if (!isset($this->locationLabels[$no])) {
-            return $base.' — emplacement '.$no.', supprimé dans l\'ancien ERP';
-        }
-
-        $label = trim($this->locationLabels[$no]);
-        $known = isset($this->warehouseByImportKey[$this->buildRefExt((string) $no)]);
-
-        // Emplacement fusionné : on précise sous quel nom son stock a été rangé.
-        if (!$known && $label !== '') {
-            return dol_trunc($base.' — emplacement '.$no.' ('.$label.')', 255, 'right', 'UTF-8', 1);
         }
 
         return $base.' — emplacement '.$no;
@@ -749,10 +668,14 @@ class MigrationStock extends AeroMigrationRunner
             return array('action' => 'skipped', 'id' => 0);
         }
 
+        $this->handledProducts[(int) $target['id']] = true;
+
+        // La destination est constante et vérifiée au démarrage : le test tient lieu de
+        // garde, non de branche fonctionnelle.
         $warehouseId = $this->resolveWarehouse($row);
         if ($warehouseId <= 0) {
-            throw new Exception('Emplacement '.((int) $row->DP_NoPrincipal).' non résolu : '
-                .'aucun entrepôt correspondant, relancez « migrate.php warehouse »');
+            throw new Exception('Entrepôt de destination introuvable :'
+                .' lancez « migrate.php warehouse » avant celui-ci');
         }
 
         $cost = isset($this->costBySage[$ref]) ? (float) $this->costBySage[$ref] : 0;
@@ -1103,9 +1026,11 @@ class MigrationStock extends AeroMigrationRunner
             return;
         }
 
+        $this->handledProducts[(int) $target['id']] = true;
+
         $warehouseId = $this->resolveWarehouse($row);
         if ($warehouseId <= 0) {
-            throw new Exception('Emplacement '.((int) $row->DP_NoPrincipal).' non résolu');
+            throw new Exception('Entrepôt de destination introuvable');
         }
 
         $cost = isset($this->costBySage[$ref]) ? (float) $this->costBySage[$ref] : 0;
@@ -1217,12 +1142,107 @@ class MigrationStock extends AeroMigrationRunner
     }
 
     /**
+     * Table rase : vide tout le stock, quelle qu'en soit l'origine.
+     *
+     * La purge ordinaire ne défait que ce que la reprise a posé, en contre-passant ses
+     * mouvements. Elle ne peut rien contre un stock venu d'ailleurs — celui que la boutique
+     * a poussé, par exemple — faute de savoir quoi contre-passer.
+     *
+     * Or l'arbitrage a changé de sens : l'export de l'ancien ERP s'est révélé plus récent
+     * que l'état de Dolibarr. Ce n'est donc plus la base qu'il faut préserver mais la
+     * source qu'il faut imposer, et le plus sûr est de repartir de zéro plutôt que de
+     * réconcilier des milliers d'écarts un à un.
+     *
+     * L'écriture est directe, et c'est assumé : aucune classe du coeur ne porte
+     * `table_element = 'product_stock'`, et contre-passer des mouvements dont on ignore
+     * l'origine n'aurait aucun sens. Ce n'est pas une reprise de données mais une remise à
+     * zéro d'environnement, réservée à l'avant-mise en service.
+     *
+     * @param  bool          $confirm  Faux pour un simple décompte
+     * @param  callable|null $progress Rappel de progression
+     * @return array{count:int,deleted:int,failed:int,errors:array}
+     */
+    protected function purgeEverything($confirm = false, $progress = null)
+    {
+        $result = array('count' => 0, 'deleted' => 0, 'failed' => 0, 'errors' => array());
+
+        $resql = $this->db->query('SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.'stock_mouvement');
+        if (!$resql) {
+            $result['errors'][] = $this->db->lasterror();
+            return $result;
+        }
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+        $result['count'] = (int) $obj->nb;
+
+        if (!$confirm) {
+            return $result;
+        }
+
+        $this->db->begin();
+
+        // Les lots avant les lignes de stock qu'ils référencent, les lignes avant les
+        // produits qu'elles dénormalisent.
+        $steps = array(
+            'DELETE FROM '.MAIN_DB_PREFIX.'product_batch',
+            'DELETE FROM '.MAIN_DB_PREFIX.'stock_mouvement',
+            'DELETE FROM '.MAIN_DB_PREFIX.'product_stock',
+            // Le coût moyen part avec le stock : le conserver ferait valoriser à un prix
+            // qu'aucun mouvement ne justifie plus. La reprise le reposera.
+            'UPDATE '.MAIN_DB_PREFIX.'product SET stock = 0, pmp = 0'
+                .' WHERE entity IN ('.getEntity('product').')',
+        );
+
+        foreach ($steps as $sql) {
+            if (!$this->db->query($sql)) {
+                $this->db->rollback();
+                $result['failed']   = $result['count'];
+                $result['errors'][] = $this->db->lasterror();
+                return $result;
+            }
+        }
+
+        $this->db->commit();
+
+        $result['deleted'] = $result['count'];
+
+        if (is_callable($progress)) {
+            call_user_func($progress, $result['deleted'], $result['count']);
+        }
+
+        return $result;
+    }
+
+    /**
      * Description de la purge.
      *
      * @return string
      */
     public function getPurgeDescription()
     {
+        if ($this->purgeAll) {
+            $out  = "TABLE RASE : vide la TOTALITÉ du stock, quelle qu'en soit l'origine.
+
+";
+            $out .= "Sont effacés les mouvements, les lignes de stock, les lots, et remis à zéro
+";
+            $out .= "le stock et le coût moyen de chaque produit. Ce que la boutique a poussé
+";
+            $out .= "disparaît aussi : il n'y a pas de tri.
+
+";
+            $out .= "À n'employer qu'avant la mise en service, quand la source est plus récente
+";
+            $out .= "que la cible et qu'on préfère la réimposer entièrement plutôt que de
+";
+            $out .= "réconcilier les écarts un à un.
+
+";
+            $out .= "Les entrepôts ne sont pas touchés. Relancez « migrate.php stock » derrière.";
+
+            return $out;
+        }
+
         return 'Contre-passation des mouvements de stock d\'ouverture et de mise en place'
             .' (codes d\'inventaire « '.$this->buildRefExt($this->inventoryKey).' » et « '
             .$this->buildRefExt($this->relocationKey).' »), suppression des lignes de'
@@ -1256,6 +1276,10 @@ class MigrationStock extends AeroMigrationRunner
     public function purge($confirm = false, $progress = null)
     {
         $result = array('count' => 0, 'deleted' => 0, 'failed' => 0, 'errors' => array());
+
+        if ($this->purgeAll) {
+            return $this->purgeEverything($confirm, $progress);
+        }
 
         // Les deux régimes sont défaits, et dans l'ordre inverse de leur écriture : la
         // seconde moitié d'un transfert doit être annulée avant la première, sans quoi le
@@ -1413,11 +1437,128 @@ class MigrationStock extends AeroMigrationRunner
         $this->reportStock($lines);
         $this->reportRelocation($lines);
         $this->reportLocations($lines);
+        $this->reportResidual($lines);
         $this->reportThresholds($lines);
         $this->reportSkipped($lines);
         $this->reportOutOfScope($lines);
 
         return $lines;
+    }
+
+    /**
+     * Le stock resté hors de l'entrepôt principal.
+     *
+     * Le rapatriement ne porte que sur les produits que le script a lus, et le filtre de
+     * lecture écarte les lignes entièrement à zéro. Un article vendu depuis la copie de la
+     * source s'y trouve donc à zéro alors qu'il porte encore du stock en base : le script
+     * ne le voit pas, et ses unités restent où elles sont.
+     *
+     * Le cas est rare mais il bloque : Dolibarr refuse de supprimer un entrepôt qui porte
+     * du stock, et c'est précisément ce qu'on cherche à faire des anciens sous-entrepôts.
+     * Mieux vaut le lire ici que le découvrir à la suppression.
+     *
+     * @param array<int,string> $lines Rapport en cours de construction
+     * @return void
+     */
+    protected function reportResidual(array &$lines)
+    {
+        $sql  = 'SELECT e.ref, COUNT(*) as lignes, SUM(ps.reel) as unites';
+        $sql .= ' FROM '.MAIN_DB_PREFIX.'product_stock as ps';
+        $sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'entrepot as e ON e.rowid = ps.fk_entrepot';
+        $sql .= ' WHERE e.entity IN ('.getEntity('stock').')';
+        $sql .= ' AND ps.fk_entrepot <> '.((int) $this->mainWarehouseId);
+        $sql .= ' AND ps.reel <> 0';
+
+        // Ce que le passage rapatrie ne « reste » pas : on l'ôte du décompte, sans quoi la
+        // simulation annoncerait comme perdu tout le stock qu'elle s'apprête à déplacer.
+        if (!empty($this->handledProducts)) {
+            $sql .= ' AND ps.fk_product NOT IN ('.implode(',', array_map('intval', array_keys($this->handledProducts))).')';
+        }
+        $sql .= ' GROUP BY e.ref ORDER BY ABS(SUM(ps.reel)) DESC';
+
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            return;
+        }
+
+        $block  = array();
+        $shown  = 0;
+        $others = 0;
+        $totalLines = 0;
+        $totalUnits = 0;
+
+        while ($obj = $this->db->fetch_object($resql)) {
+            $totalLines += (int) $obj->lignes;
+            $totalUnits += (float) $obj->unites;
+            if ($shown < 10) {
+                $block[] = '          '.str_pad(dol_trunc((string) $obj->ref, 28), 30)
+                    .$obj->lignes.' ligne(s), '.((float) $obj->unites).' unité(s)';
+                $shown++;
+            } else {
+                $others++;
+            }
+        }
+        $this->db->free($resql);
+
+        if ($totalLines === 0) {
+            return;
+        }
+
+        if ($others > 0) {
+            $block[] = '          … et '.$others.' autre(s) entrepôt(s)';
+        }
+
+        // Le détail par produit, et non seulement par entrepôt : c'est lui qui permet de
+        // trancher. Reproduire ce filtre en SQL à la main est illusoire — le script écarte
+        // aussi les articles que la source ne suit pas en stock, ceux qu'il n'a pas
+        // retrouvés et les services, qu'aucune requête sur f_artstock ne distingue.
+        $sql  = 'SELECT p.ref, e.ref as entrepot, ps.reel';
+        $sql .= ' FROM '.MAIN_DB_PREFIX.'product_stock as ps';
+        $sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'entrepot as e ON e.rowid = ps.fk_entrepot';
+        $sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'product as p ON p.rowid = ps.fk_product';
+        $sql .= ' WHERE e.entity IN ('.getEntity('stock').')';
+        $sql .= ' AND ps.fk_entrepot <> '.((int) $this->mainWarehouseId);
+        $sql .= ' AND ps.reel <> 0';
+        if (!empty($this->handledProducts)) {
+            $sql .= ' AND ps.fk_product NOT IN ('.implode(',', array_map('intval', array_keys($this->handledProducts))).')';
+        }
+        $sql .= ' ORDER BY ABS(ps.reel) DESC';
+        $sql .= $this->db->plimit(self::GAPS_LISTED, 0);
+
+        $resql = $this->db->query($sql);
+        if ($resql) {
+            $detail = array();
+            while ($obj = $this->db->fetch_object($resql)) {
+                $detail[] = '            '.str_pad((string) $obj->ref, 12)
+                    .str_pad(dol_trunc((string) $obj->entrepot, 24), 26)
+                    .((float) $obj->reel).' unité(s)';
+            }
+            $this->db->free($resql);
+
+            if (!empty($detail)) {
+                $block[] = '';
+                $block[] = '          Les plus grosses lignes :';
+                foreach ($detail as $line) {
+                    $block[] = $line;
+                }
+            }
+        }
+
+        $block[] = '';
+        $block[] = '          Ces articles n\'ont pas été pris en charge : leur ligne source est à';
+        $block[] = '          zéro, ou l\'ancien ERP ne les suit pas en stock, ou ils ne sont pas';
+        $block[] = '          repris — alors qu\'ils portent du stock en base.';
+        $block[] = '          Supprimer ces entrepôts ferait DISPARAÎTRE ce stock : Entrepot::delete()';
+        $block[] = '          efface product_stock et stock_mouvement sans vérifier ni avertir.';
+        $block[] = '          Déplacez-le à la main si vous y tenez, avant toute suppression.';
+
+        array_unshift(
+            $block,
+            $this->countLine($totalLines, 'ligne(s) de stock hors de l\'entrepôt principal,'
+                .' cumul '.((float) $totalUnits).' unité(s)')
+        );
+
+        $this->appendBlock($lines, 'Stock resté ailleurs :', $block);
     }
 
     /**
@@ -1519,7 +1660,7 @@ class MigrationStock extends AeroMigrationRunner
     }
 
     /**
-     * La ventilation par emplacement.
+     * La destination du stock, et le rappel de ce qui se passe ailleurs.
      *
      * @param array<int,string> $lines Rapport en cours de construction
      * @return void
@@ -1528,26 +1669,13 @@ class MigrationStock extends AeroMigrationRunner
     {
         $block = array();
 
-        if ($this->byMarker > 0) {
-            $block[] = $this->countLine($this->byMarker, 'ligne(s) placée(s) dans leur sous-entrepôt');
-        }
-        if ($this->byLabel > 0) {
-            $block[] = $this->countLine($this->byLabel, 'ligne(s) dont l\'emplacement avait été fusionné');
-            $block[] = '          avec un homonyme, retrouvé par son libellé.';
-        }
-        if ($this->noLocation > 0) {
-            $block[] = $this->countLine($this->noLocation, 'ligne(s) sans emplacement d\'origine,'
-                .' versées dans l\'entrepôt principal');
-        }
-        if (!empty($this->deletedLocations)) {
-            $ids = array_keys($this->deletedLocations);
-            sort($ids);
-            $block[] = $this->countLine(count($ids), 'emplacement(s) supprimé(s) dans l\'ancien ERP,'
-                .' regroupés dans « À localiser » :');
-            $block[] = '          numéros '.implode(', ', $ids).'.';
-        }
+        $block[] = '          Tout le stock est posé dans « '.$this->mainWarehouseRef.' »'
+            .' (#'.$this->mainWarehouseId.').';
+        $block[] = '          L\'emplacement d\'origine ne devient pas un entrepôt : il est porté sur';
+        $block[] = '          la fiche produit par « migrate.php productlocation ». Le mouvement en';
+        $block[] = '          garde la trace dans son libellé, à titre d\'historique.';
 
-        $this->appendBlock($lines, 'Emplacements :', $block);
+        $this->appendBlock($lines, 'Destination :', $block);
     }
 
     /**

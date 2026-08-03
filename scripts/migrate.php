@@ -24,6 +24,12 @@
  *                    sous-ensemble : mise au point, échantillon de contrôle,
  *                    rattrapage ciblé. La condition porte sur les colonnes de la
  *                    table source, sans préfixe.
+ *   --source-db=NOM  Base où lire les tables source. Sans elle, chaque script garde
+ *                    la sienne : les plus récents lisent l'export intégral de
+ *                    l'éditeur, chargé à part. « --source-db= », sans valeur, ramène
+ *                    la lecture dans la base de Dolibarr — cas des hébergements qui
+ *                    n'autorisent qu'une base par abonnement, où les tables de
+ *                    l'ancien ERP cohabitent avec les llx_*.
  *
  * Exemples :
  *   php migrate.php thirdparty --dry-run
@@ -82,6 +88,8 @@ $filter         = '';
 $updateExisting = false;
 $userLogin      = '';
 $referenceDate  = 0;
+$sourceDb       = '';
+$sourceDbSet    = false;
 
 for ($i = 1; $i < $argc; $i++) {
     $arg = $argv[$i];
@@ -110,6 +118,19 @@ for ($i = 1; $i < $argc; $i++) {
             echo "Date non exploitable : ".$m[1].'-'.$m[2].'-'.$m[3]."\n";
             exit(1);
         }
+    } elseif (preg_match('/^--source-db=(.*)$/', $arg, $m)) {
+        // Vide — « --source-db= » — désigne la base de Dolibarr elle-même. C'est le cas
+        // des hébergements qui n'autorisent qu'une base par abonnement : les tables de
+        // l'ancien ERP y cohabitent avec les llx_*, sans risque de collision, aucune
+        // d'elles ne portant ce préfixe.
+        $sourceDb    = trim($m[1]);
+        $sourceDbSet = true;
+        // Le nom finit dans un FROM que rien ne peut échapper : on le cantonne à un
+        // alphabet sûr plutôt que de faire confiance à la ligne de commande.
+        if ($sourceDb !== '' && !preg_match('/^[A-Za-z0-9_]+$/', $sourceDb)) {
+            echo "Nom de base non exploitable : ".$sourceDb."\n";
+            exit(1);
+        }
     } elseif (preg_match('/^--filter=(.*)$/s', $arg, $m)) {
         // Restreint la lecture à un sous-ensemble de la source. Sert à reprendre un
         // échantillon comparable à celui d'une autre instance, ou à rattraper des lignes
@@ -133,7 +154,7 @@ $scripts = aeromigrationGetScripts();
 
 if ($scriptCode === '') {
     echo "Usage: php ".$script_file." <script> [--dry-run] [--limit=N] [--batch=N] [--cursor=N]"
-        ." [--update] [--user=LOGIN] [--date=AAAA-MM-JJ] [--filter=\"SQL\"]\n\n";
+        ." [--update] [--user=LOGIN] [--date=AAAA-MM-JJ] [--filter=\"SQL\"] [--source-db=NOM]\n\n";
     echo "Scripts disponibles :\n";
     if (empty($scripts)) {
         echo "  (aucun)\n";
@@ -203,6 +224,14 @@ $runner->extraWhere  = $filter;
 $runner->batchSize   = $batch;
 $runner->startCursor = $cursor;
 
+// Sans l'option, on laisse au script sa propre valeur : ceux qui lisent l'export
+// intégral de l'éditeur désignent eux-mêmes la base où il a été chargé. L'option
+// posée — fût-ce à vide — l'emporte, ce qui permet de ramener la lecture dans la
+// base de Dolibarr quand l'hébergement n'en autorise qu'une.
+if ($sourceDbSet) {
+    $runner->sourceDb = $sourceDb;
+}
+
 // --update force la mise à jour, mais son absence ne doit pas écraser le réglage d'un
 // script qui agit par nature sur des enregistrements existants.
 if ($updateExisting) {
@@ -222,6 +251,9 @@ $total     = ($limit > 0 && $limit < $remaining) ? $limit : $remaining;
 
 echo "Script          : ".$langs->trans($definition['label'])." (".$definition['code'].")\n";
 echo "Utilisateur     : ".$user->login."\n";
+if ($runner->sourceDb !== '') {
+    echo "Base source     : ".$runner->sourceDb."\n";
+}
 echo "Mode            : ".($dryrun ? "SIMULATION (aucune écriture)" : "ÉCRITURE")."\n";
 echo "Tranche         : ".$batch."\n";
 if ($cursor !== null && $cursor !== '') {

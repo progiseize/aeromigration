@@ -44,6 +44,22 @@ abstract class AeroMigrationRunner
 
     // ── Description de la source ───────────────────────────────────────────
 
+    /**
+     * Base où lire les tables source, vide pour celle de Dolibarr.
+     *
+     * Les premiers travaux se sont appuyés sur une vingtaine de tables Sage importées à
+     * côté des `llx_*`. L'éditeur a depuis livré son dossier entier — plusieurs centaines
+     * de tables, dont les tables applicatives qui portent les tarifs par catégorie et les
+     * règlements — et les recopier dans la base de Dolibarr reviendrait à y verser
+     * plusieurs gigaoctets qui n'ont rien à y faire.
+     *
+     * Renseignée, elle qualifie toutes les lectures de source. Laissée vide, rien ne change
+     * pour les scripts écrits avant elle.
+     *
+     * @var string
+     */
+    public $sourceDb = '';
+
     /** @var string Table source lue (tables Sage, sans préfixe llx_) */
     protected $srcTable = '';
 
@@ -439,6 +455,24 @@ abstract class AeroMigrationRunner
     }
 
     /**
+     * Qualifie une table source de la base où elle se trouve.
+     *
+     * À employer partout où un script lit la source, y compris dans les requêtes qu'il
+     * écrit lui-même pour ses index : sans cela, une partie des lectures irait chercher
+     * dans la base de Dolibarr des tables qui n'y sont plus.
+     *
+     * @param  string $table Nom de la table source
+     * @return string        Nom qualifié, prêt à entrer dans un FROM
+     */
+    protected function src($table)
+    {
+        if ($this->sourceDb === '') {
+            return $table;
+        }
+        return '`'.$this->sourceDb.'`.'.$table;
+    }
+
+    /**
      * Nombre d'enregistrements que ce passage a devant lui.
      *
      * Tient compte du curseur de départ : sur une reprise, ce qui le précède a déjà été
@@ -461,7 +495,7 @@ abstract class AeroMigrationRunner
             $conditions[] = $cursorCondition;
         }
 
-        $sql = 'SELECT COUNT(*) as nb FROM '.$this->srcTable;
+        $sql = 'SELECT COUNT(*) as nb FROM '.$this->src($this->srcTable);
         if ($conditions) {
             $sql .= ' WHERE '.implode(' AND ', $conditions);
         }
@@ -562,7 +596,7 @@ abstract class AeroMigrationRunner
             $conditions[] = $cursorCondition;
         }
 
-        $sql  = 'SELECT '.$this->srcFields.' FROM '.$this->srcTable;
+        $sql  = 'SELECT '.$this->srcFields.' FROM '.$this->src($this->srcTable);
         if ($conditions) {
             $sql .= ' WHERE '.implode(' AND ', $conditions);
         }

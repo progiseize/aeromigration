@@ -302,7 +302,7 @@ class MigrationProduct extends AeroMigrationRunner
         }
 
         while ($obj = $this->db->fetch_object($resql)) {
-            $this->productByRef[(string) $obj->ref] = (int) $obj->rowid;
+            $this->productByRef[$this->refIndexKey($obj->ref)] = (int) $obj->rowid;
         }
         $this->db->free($resql);
 
@@ -389,12 +389,37 @@ class MigrationProduct extends AeroMigrationRunner
         }
 
         foreach (array($ref, $this->formatRef($ref)) as $candidate) {
-            if (isset($this->productByRef[$candidate])) {
-                return $this->productByRef[$candidate];
+            $key = $this->refIndexKey($candidate);
+            if (isset($this->productByRef[$key])) {
+                return $this->productByRef[$key];
             }
         }
 
         return 0;
+    }
+
+    /**
+     * Normalise une référence produit pour la recherche en index.
+     *
+     * **Sans cela, un produit existant peut être invisible au script tout en bloquant la
+     * création.** MySQL compare les chaînes sans tenir compte de la casse — collation `_ci` —
+     * là où PHP compare les clés de tableau à l'identique. Un article `EMBALLAGE` dans la
+     * source, saisi `Emballage` en cible, n'était donc pas reconnu ; le script tentait de le
+     * créer, et Dolibarr refusait sur `ErrorProductAlreadyExists`.
+     *
+     * Constaté en production sur un seul article — mais le plus utilisé du jeu, présent sur
+     * 754 lignes de commande, qui se retrouvaient toutes sans produit rattaché.
+     *
+     * Aucune collision n'en résulte : les 15 812 références de l'instance restent 15 812 une
+     * fois mises en minuscules. Et l'unicité étant de toute façon insensible à la casse côté
+     * base, deux références n'en différant que par elle ne peuvent pas coexister.
+     *
+     * @param string $ref Référence
+     * @return string     Clé d'index
+     */
+    protected function refIndexKey($ref)
+    {
+        return strtolower(trim((string) $ref));
     }
 
     /**
@@ -684,7 +709,7 @@ class MigrationProduct extends AeroMigrationRunner
 
         // Le cache des références suit les créations : si la source contient deux fois la
         // même référence, la seconde sera rattachée au lieu d'échouer sur l'unicité.
-        $this->productByRef[$product->ref] = (int) $product->id;
+        $this->productByRef[$this->refIndexKey($product->ref)] = (int) $product->id;
 
         // Déclaration à la boutique, pour qu'une synchronisation ultérieure retrouve ce
         // produit au lieu d'en créer un second.

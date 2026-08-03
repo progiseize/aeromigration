@@ -29,17 +29,54 @@ php migrate.php newsletter     désinscriptions → enrichit les tiers
 php migrate.php category       catalogue
 php migrate.php product        articles        → rattachés aux catégories
 php migrate.php supplierprice  tarifs fournisseurs → relient articles et tiers
-php migrate.php warehouse      entrepôts et emplacements
-php migrate.php stock          stocks → rattachés aux articles et aux entrepôts
+php migrate.php warehouse      dépôts → entrepôts
+php migrate.php location       emplacements → dictionnaire d'aerotoolbox
+php migrate.php stock          stocks → dans l'entrepôt du dépôt
+php migrate.php productlocation emplacement de rangement → fiche produit
 php migrate.php supplierorder  commandes fournisseur → relient tiers et articles
 php migrate.php customerorder  commandes clients → adopte celles de la boutique
 ```
 
-`warehouse` lit `f_emplacements`, **seule table du jeu source qui ne vienne pas de Sage** :
-les libellés d'emplacement n'existaient nulle part dans les données livrées et ont dû être
-extraits du code HTML de l'ancien ERP. Son script de création est dans
-[data/f_emplacements.sql](data/f_emplacements.sql), à rejouer avant la reprise sur toute
-nouvelle instance.
+### Deux bases sources
+
+L'éditeur a livré son dossier entier — 347 tables — chargé dans une base à part par
+[scripts/import_add_csv.php](scripts/import_add_csv.php). Les scripts qui la lisent portent
+`$sourceDb`, que l'option **`--source-db=NOM`** permet de changer.
+
+`warehouse`, `location`, `stock` et `productlocation` s'y appuient. Les autres lisent encore
+les tables importées à côté des `llx_*` : l'écart n'est pas anodin — sur `f_artstock`, 1 401
+quantités diffèrent et 97 articles s'ajoutent — mais les basculer demande de les éprouver un
+par un.
+
+**Quand l'hébergement n'autorise qu'une base**, ce qui est le cas sous Plesk, les tables de
+l'ancien ERP sont importées dans celle de Dolibarr. Aucune ne porte le préfixe `llx_`, la
+cohabitation est donc sans risque. Il faut alors le dire aux scripts, avec une option **sans
+valeur** :
+
+```
+php migrate.php stock --source-db=
+```
+
+### L'emplacement n'est pas un entrepôt
+
+Une première version créait un sous-entrepôt par emplacement de rangement : sept cent
+dix-neuf pour un dépôt réel. L'entrepôt dit **combien**, l'emplacement dit **où** ; les deux
+sont désormais séparés. Les emplacements vivent dans le dictionnaire
+`c_aerotoolbox_location` du module `aerotoolbox`, et sur un champ de la fiche produit.
+
+Sur une instance reprise avec l'ancien modèle :
+
+```
+migrate.php warehouse                    # adopte le dépôt, ne crée plus de sous-entrepôt
+migrate.php location                     # remplit le dictionnaire
+migrate.php stock                        # rapatrie le stock dans le dépôt
+purge.php warehouse --legacy --confirm   # supprime les vestiges
+migrate.php productlocation              # range les produits
+```
+
+**Lisez le bloc « Stock resté ailleurs » du rapport de `stock` avant la purge.**
+`Entrepot::delete()` supprime le stock et les mouvements de l'entrepôt sans avertir — voir
+P8 dans [ANOMALIES.md](ANOMALIES.md).
 
 | Script | Dépend de | Ce qui se passe s'il est lancé trop tôt |
 |---|---|---|
@@ -49,8 +86,10 @@ nouvelle instance.
 | `category` | — | |
 | `product` | `category` | les articles sont créés **sans classement**, et le rapport le signale |
 | `supplierprice` | `thirdparty`, `product` | les lignes sans article ni tiers repris sont ignorées, et le rapport les dénombre |
-| `warehouse` | — | s'arrête si `f_emplacements` ou le dépôt principal sont absents |
+| `warehouse` | — | s'arrête si le dépôt principal est absent de `f_depot` |
+| `location` | `warehouse` | s'arrête si l'entrepôt marqué `SAGE:DEPOT1` est absent |
 | `stock` | `product`, `warehouse` | s'arrête si l'entrepôt principal est absent ; les lignes sans article repris sont ignorées et dénombrées |
+| `productlocation` | `product`, `location` | s'arrête si le dictionnaire est vide ; les produits non repris sont ignorés et dénombrés |
 | `supplierorder` | `thirdparty`, `product` | les commandes dont le fournisseur n'est pas repris sont écartées et dénombrées ; les lignes sans article deviennent du texte libre |
 | `customerorder` | `thirdparty`, `product` | idem, et les commandes déjà créées par la boutique sont adoptées au lieu d'être recréées |
 
@@ -178,7 +217,8 @@ stock :
 | État du produit | Ce qui est écrit | Code d'inventaire |
 |---|---|---|
 | aucun stock | mouvement d'ouverture, à la quantité de la source | `SAGE:OUVERTURE` |
-| du stock en place | transfert vers l'emplacement de la source | `SAGE:RELOCALISATION` |
+| du stock ailleurs | transfert vers l'entrepôt du dépôt | `SAGE:RELOCALISATION` |
+| du stock déjà au bon endroit | rien, la ligne est comptée en place | — |
 
 C'est le cas en production : PrestaShop tient son stock de l'ancien ERP et Prestasync l'avait
 déjà poussé dans Dolibarr, tout entier dans l'entrepôt principal. Poser la photo par-dessus

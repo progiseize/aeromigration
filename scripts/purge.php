@@ -17,7 +17,7 @@
  *    qu'elle avait exclues, sans supprimer le moindre tiers.
  *
  * Usage :
- *   php purge.php <script> [--confirm] [--user=LOGIN]
+ *   php purge.php <script> [--confirm] [--user=LOGIN] [--legacy] [--all]
  *
  * Sans --confirm, le script se contente de dénombrer ce qui serait défait.
  */
@@ -64,11 +64,22 @@ $langs->loadLangs(array('admin', 'aeromigration@aeromigration'));
 $scriptCode = '';
 $confirm    = false;
 $userLogin  = '';
+$legacy     = false;
+$purgeAll   = false;
 
 for ($i = 1; $i < $argc; $i++) {
     $arg = $argv[$i];
     if ($arg === '--confirm') {
         $confirm = true;
+    } elseif ($arg === '--all') {
+        // Défaire au-delà de la reprise : vider ce que d'autres canaux ont posé. Réservé
+        // aux scripts qui savent le faire, et à l'avant-mise en service.
+        $purgeAll = true;
+    } elseif ($arg === '--legacy') {
+        // Ne défaire que ce qu'un modèle abandonné a laissé. Aujourd'hui, les
+        // sous-entrepôts créés du temps où chaque emplacement en était un : les
+        // supprimer sans emporter l'entrepôt qui porte désormais tout le stock.
+        $legacy = true;
     } elseif (preg_match('/^--user=(.+)$/', $arg, $m)) {
         $userLogin = $m[1];
     } elseif ($scriptCode === '' && substr($arg, 0, 2) !== '--') {
@@ -89,7 +100,7 @@ foreach ($scripts as $s) {
 }
 
 if ($definition === null) {
-    echo "Usage: php ".$script_file." <script> [--confirm] [--user=LOGIN]\n\n";
+    echo "Usage: php ".$script_file." <script> [--confirm] [--user=LOGIN] [--legacy] [--all]\n\n";
     echo "Scripts disponibles :\n";
     foreach ($scripts as $s) {
         echo "  ".$s['code']."\n";
@@ -131,6 +142,26 @@ dol_include_once($definition['file']);
 
 /** @var AeroMigrationRunner $runner */
 $runner = new $definition['class']($db, $user);
+
+// Tous les scripts n'ont pas de vestiges à distinguer : l'option n'a d'effet que sur
+// ceux qui exposent la propriété.
+if ($legacy) {
+    if (!property_exists($runner, 'legacyOnly')) {
+        echo "L'option --legacy ne s'applique pas au script ".$definition['code'].".
+";
+        exit(1);
+    }
+    $runner->legacyOnly = true;
+}
+
+if ($purgeAll) {
+    if (!property_exists($runner, 'purgeAll')) {
+        echo "L'option --all ne s'applique pas au script ".$definition['code'].".
+";
+        exit(1);
+    }
+    $runner->purgeAll = true;
+}
 
 echo "Script    : ".$definition['code']."\n";
 echo "Opération : ".$runner->getPurgeDescription()."\n";

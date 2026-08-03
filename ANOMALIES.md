@@ -1171,6 +1171,38 @@ L'écrire imposerait une requête directe. Le script se rabat sur `inventorycode
 cela par le coeur.
 
 
+### P8. `Entrepot::delete()` emporte le stock sans le dire
+
+On attend d'un ERP qu'il refuse de supprimer un entrepôt qui contient encore quelque chose.
+**Dolibarr fait l'inverse** : `Entrepot::delete()` ne vérifie rien et supprime lui-même, dans
+cet ordre (entrepot.class.php:458-481) :
+
+```
+DELETE FROM llx_product_batch    WHERE fk_product_stock IN (… de cet entrepôt)
+DELETE FROM llx_stock_mouvement  WHERE fk_entrepot = …
+DELETE FROM llx_product_stock    WHERE fk_entrepot = …
+DELETE FROM llx_entrepot         WHERE rowid = …
+```
+
+Le stock disparaît, **et son historique de mouvements avec** — donc sans trace permettant de
+savoir ce qui a été perdu, ni de le reconstituer. Aucun message, aucun code de retour négatif :
+la suppression réussit.
+
+Constaté en supprimant les 726 sous-entrepôts du modèle abandonné : douze unités d'un article
+se sont évaporées. Elles subsistaient parce que la ligne source de cet article est à zéro, si
+bien que la reprise du stock ne l'avait jamais lu et n'avait pas pu les rapatrier.
+
+**Ce qu'on en fait.** Le rapport de `migrate.php stock` dénombre le stock resté hors de
+l'entrepôt principal et nomme les entrepôts concernés ; `purge.php warehouse` ouvre sur
+l'avertissement plutôt que sur le décompte. Lire l'un avant de lancer l'autre est la seule
+protection : le coeur n'en offre aucune.
+
+À noter que `llx_product.stock` reste cohérent après coup — il tombe à `NULL`, que Dolibarr
+traite comme zéro. Un contrôle écrit `p.stock <> (SELECT SUM(reel) …)` ne remonte donc rien,
+la comparaison avec `NULL` étant elle-même `NULL` : il faut un `COALESCE(p.stock, 0)` pour
+que le contrôle ait un sens.
+
+
 ## Tiers (`f_comptet`)
 
 ### Récapitulatif

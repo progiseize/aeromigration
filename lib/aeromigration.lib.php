@@ -105,6 +105,14 @@ function aeromigrationGetScripts()
             'class' => 'MigrationWarehouse',
             'file'  => '/aeromigration/class/migrationwarehouse.class.php',
         ),
+        // Alimente le dictionnaire des emplacements d'aerotoolbox. Dépend de l'entrepôt
+        // principal, auquel tous les emplacements se rattachent.
+        array(
+            'code'  => 'location',
+            'label' => 'AeroMigScriptLocation',
+            'class' => 'MigrationLocation',
+            'file'  => '/aeromigration/class/migrationlocation.class.php',
+        ),
         // Dépend des articles ET des entrepôts : ce sont les deux extrémités d'un
         // mouvement. S'arrête si l'entrepôt principal est absent.
         array(
@@ -112,6 +120,14 @@ function aeromigrationGetScripts()
             'label' => 'AeroMigScriptStock',
             'class' => 'MigrationStock',
             'file'  => '/aeromigration/class/migrationstock.class.php',
+        ),
+        // Range les produits dans les emplacements du dictionnaire. Dépend des articles
+        // et de « location » ; sans lien avec les quantités, que porte l'entrepôt.
+        array(
+            'code'  => 'productlocation',
+            'label' => 'AeroMigScriptProductLocation',
+            'class' => 'MigrationProductLocation',
+            'file'  => '/aeromigration/class/migrationproductlocation.class.php',
         ),
         // Dépend des tiers ET des articles. À passer après « stock » sans que ce soit une
         // dépendance : la validation d'une commande fournisseur ne crée aucun mouvement,
