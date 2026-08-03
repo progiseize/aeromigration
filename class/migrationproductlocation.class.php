@@ -604,7 +604,11 @@ class MigrationProductLocation extends AeroMigrationRunner
             $lines[] = '';
             $lines[] = 'Produits introuvables dans Dolibarr : '.$this->missingProduct;
             $lines[] = '  Ces articles ont un emplacement dans la source mais n\'ont pas été repris.';
-            $lines[] = '  Relancer migrate.php product les ferait entrer.';
+            $lines[] = '  Relancer migrate.php product les ferait entrer — à condition qu\'ils';
+            $lines[] = '  existent dans f_article. Certains n\'y figurent pas : ce sont des lignes';
+            $lines[] = '  de stock orphelines, un rangement pour un article disparu, et aucune';
+            $lines[] = '  reprise ne les fera apparaître. Vérifiez avant de relancer :';
+            $lines[] = '     SELECT AR_Ref FROM f_article WHERE AR_Ref IN (…);';
             if (!empty($this->missingSamples)) {
                 $lines[] = '     '.implode(', ', $this->missingSamples)
                     .($this->missingProduct > count($this->missingSamples) ? ', …' : '');
