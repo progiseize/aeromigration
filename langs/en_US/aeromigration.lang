@@ -32,3 +32,6 @@ AeroMigStatusDone=OK
 AeroMigStatusUnknown=Unknown
 AeroMigScriptSupplierOrder=Supplier orders
 AeroMigScriptCustomerOrder=Customer orders
+AeroMigScriptInvoice=Customer invoices and payments
+AeroMigScriptPriceLevel=Customer price category
+AeroMigScriptCustomerPrice=Customer prices by level

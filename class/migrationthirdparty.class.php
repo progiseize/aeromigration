@@ -16,6 +16,7 @@
  */
 
 dol_include_once('/aeromigration/class/aeromigrationrunner.class.php');
+dol_include_once('/aeromigration/lib/aeromigration.lib.php');
 require_once DOL_DOCUMENT_ROOT.'/societe/class/societe.class.php';
 
 class MigrationThirdparty extends AeroMigrationRunner
@@ -948,14 +949,22 @@ class MigrationThirdparty extends AeroMigrationRunner
      * lorsque le niveau change vraiment, sans quoi chaque passage en --update
      * ajouterait une ligne d'historique sans objet.
      *
+     * ATTENTION : la catégorie source n'est PAS le niveau Dolibarr. Les deux premières
+     * sont permutées, le tarif du site devenant le niveau 1 — voir
+     * aeromigration_price_level(), qui porte la conversion et sa justification. Recopier
+     * N_CatTarif tel quel, comme le faisait la première version de ce script, facture au
+     * tarif comptoir les 146 388 clients de la boutique, sans qu'aucune erreur ne le dise.
+     *
      * @param Societe $societe      Tiers déjà enregistré
-     * @param int     $target       Niveau issu de la source (N_CatTarif)
+     * @param int     $catTarif     Catégorie tarifaire de la source (N_CatTarif)
      * @param int     $currentLevel Niveau actuellement en base
      * @return void
      * @throws Exception Si l'écriture échoue
      */
-    protected function applyPriceLevel(Societe $societe, $target, $currentLevel)
+    protected function applyPriceLevel(Societe $societe, $catTarif, $currentLevel)
     {
+        $target = aeromigration_price_level($catTarif);
+
         if ($target <= 0 || $societe->id <= 0 || $target === $currentLevel) {
             return;
         }

@@ -32,3 +32,6 @@ AeroMigStatusDone=OK
 AeroMigStatusUnknown=Indéterminé
 AeroMigScriptSupplierOrder=Commandes fournisseur
 AeroMigScriptCustomerOrder=Commandes clients
+AeroMigScriptInvoice=Factures et règlements clients
+AeroMigScriptPriceLevel=Catégorie tarifaire des clients
+AeroMigScriptCustomerPrice=Tarifs clients par niveau

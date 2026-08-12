@@ -70,6 +70,14 @@ if (substr($sapi_type, 0, 3) === 'cgi') {
 
 require_once $path.'../../../master.inc.php';
 require_once DOL_DOCUMENT_ROOT.'/user/class/user.class.php';
+
+// Bibliothèques que main.inc.php charge en contexte web, et que master.inc.php ne charge pas.
+// Écrire par les objets métier réveille triggers et hooks — les nôtres comme ceux du coeur —, et
+// rien ne garantit qu'ils déclarent leurs propres dépendances : un seul appel manquant arrête le
+// script en erreur fatale, au milieu d'une reprise. Les charger ici coûte quelques millisecondes.
+require_once DOL_DOCUMENT_ROOT.'/core/lib/date.lib.php';
+require_once DOL_DOCUMENT_ROOT.'/core/lib/price.lib.php';
+
 dol_include_once('/aeromigration/lib/aeromigration.lib.php');
 
 $langs->loadLangs(array('admin', 'aeromigration@aeromigration'));

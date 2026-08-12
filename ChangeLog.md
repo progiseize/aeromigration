@@ -6,6 +6,208 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.12.0] — 2026-08-12
+
+Deux chantiers, restés jusqu'ici hors publication : la reprise des **factures clients et de
+leurs règlements**, et celle des **tarifs de vente par catégorie**.
+
+---
+
+### Factures clients et règlements
+
+Nouveau script `invoice`, sur `f_docentete_global` : **182 832 factures et 525 402 lignes**.
+La source les tient en deux populations — `DO_Type = 6` pour les factures courantes,
+`DO_Type = 7` pour les comptabilisées. Les deux sont des factures réelles et leurs numéros ne
+se recoupent jamais ; le type 7 couvre 2015 → 2024, le type 6 2019 → 2026.
+
+Les factures sont **rattachées à leur commande** quand la source le permet.
+
+#### Reconnaître ce que Prestasync a déjà facturé
+
+Le module facture chaque commande de la boutique par `Facture::createFromOrder()`. Ces
+factures sont **adoptées** : reconnues, marquées d'un `ref_ext`, et laissées intactes pour
+tout le reste.
+
+Le rapprochement ne peut pas se faire par la référence, contrairement aux commandes :
+Prestasync impose la sienne sur la commande mais laisse la facture prendre le numéro du
+compteur Dolibarr. Il passe donc par la commande, dont le `ref_ext` porte la clé source.
+
+Il ne peut pas non plus se faire sur l'origine du document, et c'est le piège qu'il fallait
+éviter :
+
+```
+factures issues d'une commande boutique .................. 55 131
+dont la commande porte DÉJÀ une facture Dolibarr ......... 28 313   → adoption
+dont la commande n'en porte AUCUNE ....................... 31 832   → création
+```
+
+Prestasync n'a facturé que depuis 2023. Écarter toutes les commandes de la boutique ferait
+disparaître **31 832 factures antérieures**. C'est l'état réel de la cible qui décide.
+
+#### Un avoir se reconnaît à son total, et le seuil compte
+
+La source n'a pas de type distinct : un avoir est une facture dont le total est négatif —
+1 934 documents. Encore faut-il qu'il le soit franchement.
+
+Dolibarr force chaque ligne d'un avoir à être négative : quantité en valeur absolue, prix
+unitaire et total en négatif (facture.class.php:4415-4427). **Une ligne positive y est
+structurellement irreprésentable** : négative à la source, elle devient positive et s'ajoute
+au remboursement au lieu de s'en retrancher. Mesuré sur `AF990026466`, dont le total passait
+de 0 à −89,82 €.
+
+Or **1 024 documents totalisent quelques millièmes d'euro négatifs** — un résidu d'arrondi,
+la source stockant ses prix à six décimales. Les classer en avoir sur la foi de ce signe les
+aurait tous abîmés. Le seuil les laisse en factures ordinaires, où les lignes gardent leur
+signe et le total reste juste.
+
+#### Les règlements viennent de deux endroits
+
+La vente au comptoir encaisse sur la facture ; la vente en ligne encaisse sur la commande,
+avant facturation. Sur **110 103 règlements** : 54 064 sur des factures, 55 337 sur des
+commandes, 12 496 sur un document qui n'existe plus. Dolibarr ne sait rattacher un paiement
+qu'à une facture : les deux gisements y convergent, les orphelins sont comptés sans être
+repris. Ceux des factures adoptées ne sont jamais recréés — Prestasync les a déjà posés.
+
+**Le mode de règlement est déduit du libellé quand le code manque.** 1 540 règlements portent
+l'indice 0, absent du dictionnaire de la source : le champ n'était pas alimenté avant 2021.
+Leur moyen de paiement n'est pas perdu pour autant — il est écrit en toutes lettres à côté.
+**1 539 annoncent « Carte Bancaire Internet », pour 141 005 €**. Lire le libellé vaut mieux
+que se rabattre sur un mode choisi d'avance.
+
+L'ancien ERP distingue trois canaux de carte — internet, magasin, téléphone — là où Dolibarr
+n'a qu'un code `CB`. Les modes `CBNET` et `CBMAG` posés par `aerotoolbox` 1.5.7 sont employés
+s'ils existent et sont actifs ; sinon tout retombe sur `CB` sans que la reprise s'interrompe.
+La distinction est une amélioration, pas une condition.
+
+#### Purger dans l'ordre inverse, et rouvrir avant de défaire
+
+`is_erasable()` refuse de supprimer une facture qui n'est pas la dernière de sa séquence
+(commoninvoice.class.php:871) — pour ne pas trouer la numérotation. La purge parcourt donc
+les factures **en ordre décroissant**.
+
+Et un règlement rattaché à une facture close ne se supprime pas
+(`ErrorDeletePaymentLinkedToAClosedInvoiceNotPossible`) : la facture est rouverte par
+`setUnpaid()` avant qu'on y touche.
+
+#### État
+
+Premier lot passé sur l'instance de reprise : **24 993 factures — 24 829 créées, 164
+adoptées —, 0 erreur, 1 669 031,18 € HT**. Aucun écart supérieur à 1 € entre le total source
+et le total Dolibarr ; écart maximal **0,12 €**. Comptez huit heures pour le reste.
+
+**311 factures sont écartées**, faute de client : ils ont disparu d'ADD lui-même, ce que le
+client a confirmé. 2015 → 2019, **9 695,29 € HT**.
+
+---
+
+### Tarifs de vente par catégorie
+
+Les **tarifs de vente par catégorie de client** sont repris, et les deux premières catégories
+sont permutées.
+
+#### Un niveau de prix non renseigné facture zéro
+
+C'est le fait qui commande toute la conception, et il ne produit aucune erreur.
+`Product::fetch()` pose `multiprices[$i] = null` quand un niveau n'a pas de ligne, et
+`getSellPrice()` l'utilise sans repli : le client se voit proposer 0,00 € sur chaque ligne de
+document. Ni message, ni code de retour négatif — le devis est valide, simplement gratuit.
+
+Avant cette version, **146 498 clients étaient rattachés au niveau 2, qui portait cinq
+articles**. Toute la boutique aurait facturé zéro.
+
+`customerprice` écrit donc les huit niveaux pour tous les articles. Ceux qui n'ont aucune
+dérogation reçoivent le prix de leur fiche. D'où le volume : **127 264 lignes de prix pour
+15 908 articles**.
+
+#### Les catégories 1 et 2 sont permutées
+
+Dans l'ancien ERP, la 1 est le comptoir et la 2 le site. En cible, le tarif du site devient le
+**niveau 1**, pour une raison qu'il faut connaître avant d'y toucher : le trigger
+`PRODUCT_PRICE_MODIFY` d'`aerotoolbox` recopie le niveau 1 dans `llx_product.price`, et
+Prestasync publie ce champ vers la boutique. Le niveau 1 est **le prix que voit le client sur
+PrestaShop**. Il se trouve que c'est aussi le tarif de 146 388 clients sur 157 189.
+
+| Ancien ERP | Dolibarr | Libellé | Clients |
+|---|---|---|---:|
+| 2 — site | **1** | Défaut / Site | 146 388 |
+| 1 — Comptoir | **2** | Comptoir | 10 210 |
+| 3 à 8 | 3 à 8 | inchangés | 591 |
+
+La correspondance est portée par `aeromigration_price_level()`, **en un seul endroit**.
+`MigrationThirdparty` et le nouveau `MigrationPriceLevel` l'appellent tous les deux : les
+faire diverger reviendrait à facturer une partie du fichier client au mauvais tarif sans que
+rien ne le signale.
+
+#### Deux scripts
+
+| Script | Source | Résultat |
+|---|---|---|
+| `pricelevel` | `f_comptet` | catégorie tarifaire des clients repris |
+| `customerprice` | `f_article` + `z_tarifparticulier` | les huit niveaux de chaque article |
+
+`pricelevel` corrige plutôt qu'il ne reprend. Rejouer `thirdparty --update` aurait refait,
+pour chacun des 157 000 tiers, un mapping complet et un `Societe::update()` — des dizaines de
+requêtes par fiche pour n'en changer qu'un entier. `Societe::setPriceLevel()` n'a besoin que
+de l'identifiant : deux requêtes, et seulement pour les tiers qui changent.
+
+`customerprice` part de la **fiche article**, non de la table des tarifs. Parcourir les 27 591
+lignes de tarif obligerait à revenir plusieurs fois sur le même article sans jamais savoir
+quand ses niveaux sont tous posés — et laisserait sans prix les 10 000 articles sans
+dérogation, donc facturés zéro.
+
+#### Quatre colonnes de la source écartées, et pourquoi
+
+**La catégorie 0 n'est pas le prix public.** Elle couvre 15 059 articles et ressemble à un
+tarif général. Elle coïncide avec `f_article.AR_PrixVen` sur 15 149 des 15 885 articles
+comparables ; ce sont les 736 écarts qui tranchent : **735 fois, c'est la fiche article qui a
+bougé en dernier**. `f_article` compte 15 238 lignes modifiées en 2026 contre 570 pour la
+catégorie 0, figée en 2023.
+
+**`coeff` ne reconstitue aucun prix.** Article 78 : 3,0159 × 2,99 = 9,02 pour un tarif réel de
+9,50. Article 2502 : 2,3174 × 11,20 = 25,95 contre 29,95. C'est un indicateur de marge, laissé
+à zéro sur 22 217 lignes.
+
+**`statut` ne corrèle avec rien.** Le filtre naturel `statut = 'O'` serait un désastre
+silencieux : en catégorie Comptoir, **3 717 lignes sur 5 217 ont un statut vide**. Il en
+perdrait 71 %.
+
+**Soixante et une règles par famille ne font rien** — `remise = 0`, `coeff = 1`. Sept sont
+agissantes : Aéro-Clubs à −5 % sur 1 943 articles, Marché Enac à −9 % et −20 %. Un article
+relevant de plusieurs familles remisées reçoit **la remise la plus forte**, faute de quoi son
+prix dépendrait de l'ordre des colonnes `CL_No1..4`.
+
+#### Idempotence sans marqueur
+
+`llx_product_price` déclare bien un `import_key`, mais `Product::_log_price()` ne l'écrit
+jamais. Le script se passe donc de marqueur et **compare les valeurs** : `updatePrice()` n'est
+appelée que si le prix calculé diffère de plus d'un demi-centime de celui en base.
+
+Ce seuil n'est pas une commodité — `llx_product.price` est arrondi au centime là où
+`llx_product_price` conserve huit décimales. Comparer strictement rejouerait huit lignes
+d'historique par article à chaque passage.
+
+C'est aussi plus sûr qu'un marqueur : un prix corrigé à la main puis rejoué revient à sa
+valeur source, là où un marqueur aurait fait sauter la ligne.
+
+#### Deux précautions d'écriture
+
+Les niveaux 2 à 8 sont écrits **avant** le niveau 1. `updatePrice()` recopie le prix dans
+`llx_product` sans jamais regarder le niveau qu'elle écrit : finir par le premier laisse le
+prix de base juste, y compris si le trigger de réalignement venait à être désactivé.
+
+L'autogénération est coupée (`$ignore_autogen = 1`) : elle régénérerait les niveaux 2 à 8 à
+partir du premier et écraserait tout le travail.
+
+⚠️ **`purge.php customerprice` remet les prix à zéro.** Entre la purge et la fin du rejeu,
+`llx_product.price` vaut 0 pour tout le catalogue repris : **Prestasync doit être suspendu**.
+Comptez un quart d'heure.
+
+#### Corrigé
+
+- `MigrationThirdparty::applyPriceLevel()` recopiait `N_CatTarif` tel quel dans `price_level`.
+  Elle passe désormais par `aeromigration_price_level()`.
+
+
 ## [0.11.0] — 2026-08-03
 
 L'**emplacement de stockage cesse d'être un entrepôt**, et la reprise s'appuie désormais sur

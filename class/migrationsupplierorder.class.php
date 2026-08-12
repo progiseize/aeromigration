@@ -346,7 +346,7 @@ class MigrationSupplierOrder extends AeroMigrationRunner
     {
         $sql  = 'SELECT DO_Piece, AR_Ref, DL_Design, DL_Qte, DL_PrixUnitaire, DL_Taxe1,';
         $sql .= ' DL_Remise01REM_Valeur, DL_Remise01REM_Type, AF_RefFourniss, DL_Ligne';
-        $sql .= ' FROM f_docligne_global';
+        $sql .= ' FROM '.$this->src('f_docligne_global');
         $sql .= ' WHERE DO_Domaine = '.self::SRC_DOMAIN.' AND DO_Type = '.self::SRC_TYPE;
         $sql .= ' ORDER BY DO_Piece, DL_Ligne';
 
@@ -378,7 +378,7 @@ class MigrationSupplierOrder extends AeroMigrationRunner
      */
     protected function loadFollowUps()
     {
-        $sql  = 'SELECT DISTINCT DL_PieceBC FROM f_docligne_global';
+        $sql  = 'SELECT DISTINCT DL_PieceBC FROM '.$this->src('f_docligne_global');
         $sql .= ' WHERE DO_Domaine = '.self::SRC_DOMAIN.' AND DO_Type IN (13, 16)';
         $sql .= " AND DL_PieceBC IS NOT NULL AND TRIM(DL_PieceBC) <> ''";
 

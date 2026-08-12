@@ -273,7 +273,7 @@ class MigrationSupplierPrice extends AeroMigrationRunner
     {
         $queries = array(
             'sourceArticles' => array(
-                'sql'   => 'SELECT AR_Ref as k FROM f_article',
+                'sql'   => 'SELECT AR_Ref as k FROM '.$this->src('f_article'),
                 'field' => 'k',
             ),
             // f_comptet compte 157 102 lignes : on la restreint aux seuls tiers cités par

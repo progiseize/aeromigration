@@ -35,7 +35,14 @@ php migrate.php stock          stocks → dans l'entrepôt du dépôt
 php migrate.php productlocation emplacement de rangement → fiche produit
 php migrate.php supplierorder  commandes fournisseur → relient tiers et articles
 php migrate.php customerorder  commandes clients → adopte celles de la boutique
+php migrate.php invoice        factures et règlements → rattachés à leur commande
+php migrate.php pricelevel     catégorie tarifaire des clients
+php migrate.php customerprice  tarifs de vente, les huit niveaux
 ```
+
+Les deux derniers **se passent ensemble** : `pricelevel` range les clients par catégorie,
+`customerprice` remplit les grilles. Entre les deux, les uns et les autres ne se
+correspondent pas.
 
 ### Deux bases sources
 
@@ -189,12 +196,12 @@ première la prend, les suivantes reçoivent leur numéro de document, unique pa
 > Avant d'écrire quoi que ce soit en production, lancer un `--dry-run` et **regarder le
 > compteur « adoptés »** : c'est lui qui dit si le rapprochement fonctionne.
 
-## Idempotence : `ref_ext`, et `import_key` par exception
+## Idempotence : `ref_ext`, et deux exceptions
 
 Chaque objet créé porte la clé de son enregistrement source dans `ref_ext`, préfixée
 « SAGE: ». C'est ce qui rend les scripts rejouables sans table de correspondance dédiée.
 
-Deux tables font exception, faute de `ref_ext` :
+Trois tables font exception, faute de `ref_ext` :
 
 **`llx_product_fournisseur_price`** — le script `supplierprice` se rabat sur `import_key`,
 prévue pour cela par le coeur et écrite par l'API `ProductFournisseurPrice`, sans requête
@@ -208,6 +215,44 @@ coeur est précisément de regrouper plusieurs lignes en une opération. Ils por
 `SAGE:OUVERTURE` ou `SAGE:RELOCALISATION` selon le régime (voir ci-dessous), ce qui donne au
 client une poignée concrète : filtrer dessus dans **Produits > Stocks > Mouvements** sort la
 reprise en entier.
+
+**`llx_product_price`** — la colonne `import_key` y existe bien, mais `Product::_log_price()`
+ne l'écrit **jamais**, et l'y poser demanderait une requête directe. Le script
+`customerprice` se passe donc de marqueur : il **compare les valeurs**. Le prix calculé est
+confronté à celui déjà en base, et `updatePrice()` n'est appelée que s'ils diffèrent de plus
+d'un demi-centime. Un second passage n'écrit rien.
+
+Ce seuil n'est pas une commodité : `llx_product.price` est arrondi au centime là où
+`llx_product_price` conserve huit décimales. Comparer strictement ferait rejouer huit lignes
+d'historique par article à chaque passage, sur des écarts de l'ordre du millionième d'euro.
+
+## Les tarifs de vente : huit niveaux, obligatoirement remplis
+
+Le multi-prix de Dolibarr n'a **aucun repli**. `Product::fetch()` pose
+`multiprices[$i] = null` quand un niveau n'a pas de ligne, et `getSellPrice()` l'utilise tel
+quel : un client dont la catégorie n'a pas de prix pour l'article se voit facturer **0,00 €**,
+sans le moindre avertissement.
+
+`customerprice` écrit donc les huit niveaux pour tous les articles, y compris ceux qui n'ont
+aucune dérogation — ils reçoivent alors le prix de la fiche article. D'où le volume :
+environ 127 000 lignes de prix pour 15 900 articles.
+
+**Les deux premières catégories sont permutées.** Dans l'ancien ERP, la 1 est le comptoir et
+la 2 le site ; en cible, le tarif du site devient le **niveau 1**. La raison tient à une
+chaîne qu'il faut connaître avant d'y toucher : le trigger `PRODUCT_PRICE_MODIFY`
+d'`aerotoolbox` recopie le niveau 1 dans `llx_product.price`, et Prestasync publie ce champ
+vers la boutique. Le niveau 1 est donc **le prix que voit le client sur PrestaShop**. Il se
+trouve que c'est aussi le tarif de 146 388 clients sur 157 189 : les deux raisons désignent
+le même niveau.
+
+La correspondance est portée par `aeromigration_price_level()`, en un seul endroit.
+`MigrationThirdparty` et `MigrationPriceLevel` l'appellent tous les deux — les faire diverger
+reviendrait à facturer une partie du fichier client au mauvais tarif, sans que rien ne
+le signale.
+
+⚠️ **`purge.php customerprice` remet les prix à zéro.** Entre la purge et la fin du rejeu,
+`llx_product.price` vaut 0 pour tout le catalogue repris : **Prestasync doit être suspendu**,
+faute de quoi la boutique publierait un catalogue gratuit. Comptez un quart d'heure.
 
 ## Le stock, quand la cible n'est pas vierge
 
@@ -247,11 +292,15 @@ Ce fichier se complète au fur et à mesure de l'écriture des scripts.
 
 ## Documents commerciaux
 
-Les quatre tables de documents — devis, commandes, factures, réceptions — ne sont **pas
-reprises** à ce jour. Leur analyse préalable est dans [DOCUMENTS.md](DOCUMENTS.md) :
-nomenclature des types, colonnes exploitables, volumétrie, correspondance possible avec les
-objets Dolibarr, et les trois limites qui décideront du périmètre — au premier rang
-desquelles l'absence totale de règlements enregistrés.
+Trois familles sont reprises : **commandes clients**, **commandes fournisseur**, et
+**factures clients avec leurs règlements**. Les devis, bons de livraison et retours ne le sont
+pas — leur intérêt rétrospectif est faible et le périmètre reste à arbitrer avec le client.
+
+L'analyse préalable des quatre tables est dans [DOCUMENTS.md](DOCUMENTS.md) : nomenclature des
+types, colonnes exploitables, volumétrie et correspondance avec les objets Dolibarr. Elle tenait
+l'absence de règlements pour rédhibitoire et laissait ouverte une piste — « les récupérer
+ailleurs ». Cette piste a abouti : ils sont dans `z_docregl_global`, table applicative hors du
+périmètre Sage exploré alors. Le script `invoice` en trouve **110 103**.
 
 ## Arborescence
 
