@@ -193,6 +193,15 @@ if (!$confirm) {
 }
 
 echo "\nTraités   : ".$result['deleted']."\n";
+
+// Certains scripts ne suppriment pas tout ce qu'ils ont marqué : une facture créée par la
+// boutique et seulement adoptée par la reprise perd son marqueur, mais reste en place.
+// Confondre les deux dans un total unique laisse craindre une suppression qui n'a pas lieu.
+if (!empty($result['unmarked'])) {
+    echo "  dont supprimé(s)  : ".($result['deleted'] - $result['unmarked'])."\n";
+    echo "  dont démarqué(s)  : ".$result['unmarked']." (objet conservé, marqueur de reprise retiré)\n";
+}
+
 echo "En échec  : ".$result['failed']."\n";
 
 if (!empty($result['errors'])) {

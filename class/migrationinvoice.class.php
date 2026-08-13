@@ -1269,9 +1269,13 @@ class MigrationInvoice extends AeroMigrationRunner
             }
 
             // Facture de la boutique : le marqueur est retiré, rien n'est supprimé.
+            //
+            // Compté à part : additionner les démarquages aux suppressions dans un total
+            // unique laisse croire que la purge s'apprête à effacer des factures Prestasync.
             if (strpos((string) $row->note_private, 'ancien ERP') === false) {
                 $invoice->setValueFrom('ref_ext', '', '', null, 'text', '', $this->user);
                 $result['deleted']++;
+                $result['unmarked'] = (isset($result['unmarked']) ? $result['unmarked'] : 0) + 1;
                 continue;
             }
 

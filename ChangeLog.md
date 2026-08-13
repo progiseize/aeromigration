@@ -6,6 +6,53 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.12.2] — 2026-08-12
+
+### Le rapport de purge distinguait mal ce qu'il détruit de ce qu'il conserve
+
+`purge.php invoice` annonçait un total unique — 1 993 « traités » là où il n'y avait que
+**1 829 suppressions et 164 démarquages**. Les factures produites par Prestasync et seulement
+adoptées par la reprise ne sont jamais supprimées : elles perdent leur `ref_ext` et restent en
+place. Le code le faisait déjà correctement ; c'est le compteur qui les additionnait.
+
+Confondues dans un même nombre, elles laissaient craindre une destruction qui n'a pas lieu —
+et devant 164 factures de la boutique, l'hésitation est légitime.
+
+```
+Traités   : 1993
+  dont supprimé(s)  : 1829
+  dont démarqué(s)  : 164 (objet conservé, marqueur de reprise retiré)
+```
+
+### Un mode de repli pour les règlements sans mode connu
+
+Rien à déployer, c'est un réglage — mais il change ce que la reprise conserve.
+
+`AEROMIG_PAYMENT_FALLBACK_CODE` existait sans être utilisé : faute de mode désigné, un
+règlement dont le mode reste introuvable n'était pas repris. En y pointant un mode créé pour
+cela — `INDET`, « Mode indéterminé (reprise) » —, ces règlements entrent en base et se
+retrouvent d'un filtre.
+
+Cela concerne les **110 règlements de l'indice 6**, absent du dictionnaire de la source, pour
+15 114,21 € — soit 0,13 % des encaissements. Population mixte, et c'est ce qui justifie de les
+garder plutôt que de les écarter en bloc :
+
+```
+43  sans libellé              12 625,42 €   dont un seul de 11 727,08 €
+14  « RBSMT PORTWD »               82,96 €
+ 8  « Annulée sous Vision »         0,00 €
+ 4  « Remise marché non appliquée » 1 243,03 €
+ 1  « Chèque cadeau SUFT-4VR3… »   95,00 €
+```
+
+Les gestes commerciaux et détaxes ne sont pas des encaissements. Mais les lignes sans libellé
+— 12 625 € — ressemblent à de vrais règlements dont le mode a été perdu, et un chèque cadeau
+en est un. Les écarter laissait des factures impayées à tort.
+
+Le tri fin reste à faire, mais il se fera sur des données présentes plutôt que sur un compteur
+d'anomalies.
+
+
 ## [0.12.1] — 2026-08-12
 
 Correctifs de mise en ligne. Aucune fonctionnalité nouvelle, mais **un défaut de calcul qu'il
