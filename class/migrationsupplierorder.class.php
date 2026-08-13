@@ -167,8 +167,6 @@ class MigrationSupplierOrder extends AeroMigrationRunner
     /** @var int Lignes portant une remise */
     protected $discountLines = 0;
 
-    /** @var int Lignes dont la remise est un montant et non un taux */
-    protected $amountDiscountLines = 0;
 
     /** @var int Lignes à quantité nulle */
     protected $zeroQtyLines = 0;
@@ -672,17 +670,16 @@ class MigrationSupplierOrder extends AeroMigrationRunner
 
         // La source autorise trois remises par ligne, mais seule la première est utilisée
         // sur ce périmètre — les deux autres sont nulles sur les 24 265 lignes.
+        // DL_Remise01REM_Type ne distingue pas pourcentage et montant, contrairement à ce que
+        // ce script a longtemps supposé — c'est d'ici que l'hypothèse est partie, et elle a
+        // fini par coûter sa remise à 7 927 lignes de facture. La démonstration est dans
+        // MigrationInvoice::mapLine() : 7 851 lignes conformes au pourcentage, 6 au montant.
+        //
+        // Aucune ligne de ce périmètre ne porte de remise de type 1 : la correction y est
+        // préventive, pour qu'un futur export ne réintroduise pas le défaut.
         $discount = (float) $line->DL_Remise01REM_Valeur;
         if ($discount != 0) {
             $this->discountLines++;
-
-            // Type 1 = montant et non pourcentage, sur 16 lignes de tout le jeu. Dolibarr
-            // n'a qu'un taux par ligne : le montant est ignoré plutôt que d'être pris pour
-            // un pourcentage, ce qui fausserait la ligne bien davantage.
-            if ((int) $line->DL_Remise01REM_Type === 1) {
-                $this->amountDiscountLines++;
-                $discount = 0;
-            }
         }
         if ($discount < 0) {
             // Une remise négative est une majoration, que Dolibarr ne sait pas représenter.
@@ -970,10 +967,6 @@ class MigrationSupplierOrder extends AeroMigrationRunner
         }
         if ($this->negativeQtyLines > 0) {
             $block[] = $this->countLine($this->negativeQtyLines, 'ligne(s) à quantité négative, reprises telles quelles');
-        }
-        if ($this->amountDiscountLines > 0) {
-            $block[] = $this->countLine($this->amountDiscountLines, 'ligne(s) dont la remise est un montant :'
-                .' ignorée, Dolibarr n\'ayant qu\'un taux par ligne');
         }
         if (!empty($this->oddReferences)) {
             $block[] = $this->countLine(count($this->oddReferences), 'référence(s) source corrompue(s),'

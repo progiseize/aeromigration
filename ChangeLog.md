@@ -6,6 +6,36 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.12.3] — 2026-08-12
+
+### La remise « de type 1 » corrigée aussi sur les commandes
+
+Même défaut que dans `MigrationInvoice`, corrigé à la source : `DL_Remise01REM_Type = 1` n'est
+pas une remise en montant, c'est un pourcentage comme les autres.
+
+L'ampleur, mesurée avant de corriger, est sans commune mesure avec celle des factures :
+
+| | Lignes de type 1 remisées | Conformes au pourcentage |
+|---|---:|---:|
+| Commandes clients | **16** sur 202 427 | 16 sur 16 |
+| Commandes fournisseur | **0** sur 24 545 | — |
+
+Côté fournisseur, la correction est **préventive** : aucune ligne n'est concernée. C'est
+pourtant de ce script que l'hypothèse était partie — formulée sur « seize lignes de tout le
+jeu », elle y était sans conséquence, et l'est devenue en migrant vers les factures où elle
+touchait 7 927 lignes.
+
+Les commandes déjà reprises ne sont pas rejouées : seize lignes sur 202 427, sur des documents
+qui font office d'historique et non de pièce comptable. La reprise définitive partira des
+scripts corrigés.
+
+**Retiré** : le compteur `amountDiscountLines` des deux scripts. Plus alimenté, il serait resté
+à zéro dans les rapports sans que sa disparition s'explique.
+
+Les remises 2 et 3 de la source ne sont, elles, jamais renseignées — vérifié sur les
+525 519 lignes de facture comme sur les 226 972 lignes de commande.
+
+
 ## [0.12.2] — 2026-08-12
 
 ### Le rapport de purge distinguait mal ce qu'il détruit de ce qu'il conserve

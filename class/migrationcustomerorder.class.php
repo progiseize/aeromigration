@@ -192,8 +192,6 @@ class MigrationCustomerOrder extends AeroMigrationRunner
     /** @var int Lignes portant une remise */
     protected $discountLines = 0;
 
-    /** @var int Lignes dont la remise est un montant */
-    protected $amountDiscountLines = 0;
 
     /** @var int Lignes à quantité négative */
     protected $negativeQtyLines = 0;
@@ -893,16 +891,17 @@ class MigrationCustomerOrder extends AeroMigrationRunner
             $vat = 0;
         }
 
+        // DL_Remise01REM_Type ne distingue pas pourcentage et montant : la remise est
+        // TOUJOURS un taux, quel que soit son type. Vérifié sur les 16 lignes de type 1 de ce
+        // périmètre, toutes conformes au calcul en pourcentage et aucune au calcul en montant.
+        // La démonstration complète est dans MigrationInvoice::mapLine(), où le défaut coûtait
+        // sa remise à 7 927 lignes de facture.
         $discount = (float) $line->DL_Remise01REM_Valeur;
         if ($discount != 0) {
             $this->discountLines++;
-
-            if ((int) $line->DL_Remise01REM_Type === 1) {
-                $this->amountDiscountLines++;
-                $discount = 0;
-            }
         }
         if ($discount < 0) {
+            // Une remise négative est une majoration, que Dolibarr ne sait pas représenter.
             $discount = 0;
         }
 
@@ -1130,9 +1129,6 @@ class MigrationCustomerOrder extends AeroMigrationRunner
         }
         if ($this->negativeQtyLines > 0) {
             $block[] = $this->countLine($this->negativeQtyLines, 'ligne(s) à quantité négative');
-        }
-        if ($this->amountDiscountLines > 0) {
-            $block[] = $this->countLine($this->amountDiscountLines, 'ligne(s) dont la remise est un montant : ignorée');
         }
         if ($this->foreignCurrency > 0) {
             $block[] = $this->countLine($this->foreignCurrency, 'commande(s) en devise étrangère');
