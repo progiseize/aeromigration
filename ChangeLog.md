@@ -6,6 +6,35 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.12.4] — 2026-08-12
+
+### Un règlement sans date n'est plus perdu
+
+`Paiement::create()` refusait l'écriture — « Incorrect datetime value: '' for column `datep` » —
+et le règlement disparaissait, alors que son montant était parfaitement lisible. Rencontré en
+production sur `F990006079` : un virement de 91,20 €, sans date et sans libellé.
+
+Cinq lignes sont dans ce cas sur les **109 938 règlements** du domaine vente : quatre sans
+date, une datée de l'an 7. La date de la facture leur sert désormais de repli — elle est
+toujours connue, et un encaissement daté du jour de sa facture reste plus juste que pas
+d'encaissement du tout. Le rapport les dénombre.
+
+Le script encaissait déjà l'échec sans interrompre la facture : seul le règlement manquait,
+et l'erreur était nommée. Le comportement ne change que pour ces cinq lignes.
+
+### Documentation
+
+Le README n'imposait de suspendre Prestasync que pour la purge des tarifs. C'est insuffisant :
+**la synchronisation doit être coupée avant `pricelevel` et rallumée après `customerprice`**,
+purge ou non. Trois raisons désormais explicitées, dont deux subsistent sans purge — les prix
+changent article par article pendant un quart d'heure, et entre les deux scripts les clients
+basculés vers le niveau 1 n'ont pas encore de tarif, donc seraient facturés zéro.
+
+L'ordre d'exécution porte la mention en regard des deux lignes concernées, et le rappel de
+**rejouer la synchronisation** une fois les deux passés : la boutique publie
+`llx_product.price`, c'est-à-dire le niveau 1, qui vient de changer de sens.
+
+
 ## [0.12.3] — 2026-08-12
 
 ### La remise « de type 1 » corrigée aussi sur les commandes

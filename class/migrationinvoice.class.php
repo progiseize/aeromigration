@@ -225,6 +225,9 @@ class MigrationInvoice extends AeroMigrationRunner
     /** @var int Règlements écartés : montant nul */
     protected $paymentsZero = 0;
 
+    /** @var int Règlements dont la date source était inexploitable, datés de leur facture */
+    protected $paymentsUndatedFixed = 0;
+
     /** @var int Règlements écartés : compensation par avoir, pas un encaissement */
     protected $paymentsCreditNote = 0;
 
@@ -1041,8 +1044,20 @@ class MigrationInvoice extends AeroMigrationRunner
                 continue;
             }
 
+            // Une date de règlement inexploitable fait échouer l'INSERT — « Incorrect datetime
+            // value: '' » —, et le règlement est perdu alors que son montant est parfaitement
+            // lisible. Cinq lignes sont dans ce cas sur 109 938 : quatre sans date, une datée
+            // de l'an 7. La date de la facture leur sert de repli : elle est toujours connue,
+            // et un encaissement daté du jour de sa facture reste plus juste que pas
+            // d'encaissement du tout.
+            $paidAt = $this->db->jdate($row->DR_Date);
+            if (empty($paidAt) || $paidAt < 0) {
+                $paidAt = $invoice->date;
+                $this->paymentsUndatedFixed++;
+            }
+
             $payment = new Paiement($this->db);
-            $payment->datepaye     = $this->db->jdate($row->DR_Date);
+            $payment->datepaye     = $paidAt;
             $payment->amounts      = array($invoice->id => abs($amount));
             $payment->paiementid   = $modeId;
             $payment->num_payment  = trim((string) $row->DR_Libelle);
@@ -1193,6 +1208,10 @@ class MigrationInvoice extends AeroMigrationRunner
         }
         if ($this->paymentsZero > 0) {
             $report[] = $this->paymentsZero.' règlement(s) écarté(s) : montant nul';
+        }
+        if ($this->paymentsUndatedFixed > 0) {
+            $report[] = $this->paymentsUndatedFixed.' règlement(s) sans date exploitable :'
+                .' datés du jour de leur facture';
         }
         if ($this->bankAccountId <= 0) {
             $report[] = 'Aucun compte bancaire configuré (AEROMIG_INVOICE_BANK_ACCOUNT) :'

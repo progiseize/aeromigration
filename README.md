@@ -37,13 +37,16 @@ php migrate.php supplierorder  commandes fournisseur → relient tiers et articl
 php migrate.php customerorder  commandes clients → adopte celles de la boutique
 php migrate.php invoice        factures et règlements → rattachés à leur commande
 php migrate.php reception      réceptions fournisseur → adossées aux lignes de commande
-php migrate.php pricelevel     catégorie tarifaire des clients
-php migrate.php customerprice  tarifs de vente, les huit niveaux
+php migrate.php pricelevel     catégorie tarifaire des clients   ⚠ Prestasync coupé
+php migrate.php customerprice  tarifs de vente, les huit niveaux ⚠ Prestasync coupé
 ```
 
-Les deux derniers **se passent ensemble** : `pricelevel` range les clients par catégorie,
-`customerprice` remplit les grilles. Entre les deux, les uns et les autres ne se
-correspondent pas.
+Les deux derniers **se passent ensemble, Prestasync suspendu** : `pricelevel` range les clients
+par catégorie, `customerprice` remplit les grilles. Entre les deux, les uns et les autres ne se
+correspondent pas — et un client dont le niveau n'a pas encore de prix se voit facturer zéro.
+
+La synchronisation est rallumée et **rejouée** une fois les deux passés : la boutique publie
+`llx_product.price`, c'est-à-dire le niveau 1, qui vient de changer de sens.
 
 ### Deux bases sources
 
@@ -303,9 +306,27 @@ La correspondance est portée par `aeromigration_price_level()`, en un seul endr
 reviendrait à facturer une partie du fichier client au mauvais tarif, sans que rien ne
 le signale.
 
-⚠️ **`purge.php customerprice` remet les prix à zéro.** Entre la purge et la fin du rejeu,
-`llx_product.price` vaut 0 pour tout le catalogue repris : **Prestasync doit être suspendu**,
-faute de quoi la boutique publierait un catalogue gratuit. Comptez un quart d'heure.
+### ⚠️ Suspendre Prestasync pendant toute la mise à jour des tarifs
+
+**Purge ou non, la synchronisation doit être coupée avant `pricelevel` et rallumée après
+`customerprice`.** Trois raisons distinctes, dont deux subsistent même sans purge :
+
+**Les prix changent article par article.** `customerprice` écrit huit niveaux pour chacun des
+15 908 articles, et le trigger `PRODUCT_PRICE_MODIFY` réaligne `llx_product.price` à chaque
+passage. Pendant le quart d'heure que dure le script, la boutique reçoit des prix
+intermédiaires — certains articles à jour, d'autres non.
+
+**Entre les deux scripts, les clients et les tarifs ne se correspondent pas.** `pricelevel`
+bascule 146 388 clients du niveau 2 au niveau 1 ; tant que `customerprice` n'a pas rempli ce
+niveau, ces clients n'ont plus de tarif. Un client sans prix se voit facturer zéro — voir plus
+haut, un niveau vide ne connaît aucun repli.
+
+**Et si vous purgez**, `llx_product.price` vaut 0 pour tout le catalogue repris entre la purge
+et la fin du rejeu : la boutique publierait un catalogue gratuit.
+
+Une fois les deux scripts passés et contrôlés, **rejouez la synchronisation** : la boutique
+porte encore les prix d'avant l'inversion, et c'est le niveau 1 — le tarif du site — qu'elle
+doit désormais publier.
 
 ## Le stock, quand la cible n'est pas vierge
 
