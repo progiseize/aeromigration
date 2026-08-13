@@ -228,6 +228,9 @@ class MigrationInvoice extends AeroMigrationRunner
     /** @var int Règlements dont la date source était inexploitable, datés de leur facture */
     protected $paymentsUndatedFixed = 0;
 
+    /** @var int Lignes dont la quantité ET le prix étaient négatifs, tous deux inversés */
+    protected $invertedSignLines = 0;
+
     /** @var int Règlements écartés : compensation par avoir, pas un encaissement */
     protected $paymentsCreditNote = 0;
 
@@ -925,6 +928,7 @@ class MigrationInvoice extends AeroMigrationRunner
             $qty = -$qty;
         }
 
+
         $vat = $line->DL_Taxe1;
         if ($vat === null) {
             $vat = 0;
@@ -966,6 +970,37 @@ class MigrationInvoice extends AeroMigrationRunner
             $price   *= (1 - $discount / 100);
             $discount = 0;
             $this->markupLines++;
+        }
+
+        // ------------------------------------------------------------------------------
+        // QUANTITÉ ET PRIX TOUS DEUX NÉGATIFS : DOLIBARR SE TROMPE DE SIGNE
+        // ------------------------------------------------------------------------------
+        //
+        // `Facture::addline()` écrit un total de ligne NÉGATIF là où deux facteurs négatifs
+        // donnent un produit positif. Vérifié sur les trois combinaisons, facture jetable à
+        // l'appui :
+        //
+        //     qty<0 et prix<0 ... attendu +96, obtenu -96   ← le seul cas faux
+        //     qty>0 et prix<0 ... attendu -96, obtenu -96
+        //     qty<0 et prix>0 ... attendu -96, obtenu -96
+        //
+        // Le calcul du coeur est pourtant juste : `calcul_price_total(-1, -96)` renvoie bien
+        // +96. Le signe se perd entre cet appel et l'écriture de la ligne.
+        //
+        // 22 lignes sont dans ce cas, pour 1 708,67 € — comptés en négatif, l'écart vaut le
+        // double. Mesuré en production : 3 265 € de manque sur 20 000 factures, et jusqu'à
+        // 455,89 € sur un seul document, dont la source vaut 5,57 €.
+        //
+        // Le contournement ne dénature rien : inverser les DEUX facteurs laisse leur produit
+        // inchangé, et Dolibarr calcule alors juste. La ligne affiche une quantité positive au
+        // lieu de « −1 × −96 », ce qui est de toute façon plus lisible.
+        //
+        // Placé APRÈS le report de la remise négative sur le prix : celui-ci peut lui-même
+        // rendre un prix négatif, et le contournement doit voir la valeur définitive.
+        if ($qty < 0 && $price < 0) {
+            $qty   = -$qty;
+            $price = -$price;
+            $this->invertedSignLines++;
         }
 
         return array(
@@ -1212,6 +1247,10 @@ class MigrationInvoice extends AeroMigrationRunner
         if ($this->paymentsUndatedFixed > 0) {
             $report[] = $this->paymentsUndatedFixed.' règlement(s) sans date exploitable :'
                 .' datés du jour de leur facture';
+        }
+        if ($this->invertedSignLines > 0) {
+            $report[] = $this->invertedSignLines.' ligne(s) à quantité ET prix négatifs :'
+                .' les deux signes inversés, Dolibarr calculant faux dans ce cas';
         }
         if ($this->bankAccountId <= 0) {
             $report[] = 'Aucun compte bancaire configuré (AEROMIG_INVOICE_BANK_ACCOUNT) :'

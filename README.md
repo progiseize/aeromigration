@@ -396,7 +396,25 @@ aeromigration/
 ├── langs/          Traductions (fr_FR, en_US)
 ├── lib/            Fonctions partagées
 └── scripts/        Lanceurs en ligne de commande
+    ├── migrate.php              lance une reprise
+    ├── purge.php                défait ce qu'une reprise a produit
+    ├── import_add_csv.php       charge l'export de l'éditeur
+    └── fix_invoice_signs.php    correctif ponctuel, voir ci-dessous
 ```
+
+### Correctifs ponctuels
+
+`fix_invoice_signs.php` répare les factures reprises avant la 0.12.5, dont les lignes à
+quantité **et** prix négatifs portaient un total inversé. Il corrige en place, sans supprimer
+— `is_erasable()` interdit de retirer une facture au milieu d'une séquence — et conserve la
+référence.
+
+```
+php fix_invoice_signs.php              dénombre et liste
+php fix_invoice_signs.php --confirm    applique
+```
+
+Sans effet sur une base reprise avec la 0.12.5 ou au-delà : il ne trouve alors rien à corriger.
 
 ## Ajouter un script de reprise
 

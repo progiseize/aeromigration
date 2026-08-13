@@ -6,6 +6,70 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.12.5] — 2026-08-12
+
+### Quantité et prix tous deux négatifs : Dolibarr se trompe de signe
+
+`Facture::addline()` écrit un total de ligne **négatif** là où deux facteurs négatifs donnent
+un produit positif. Isolé sur une facture jetable, les trois combinaisons :
+
+```
+qty<0 et prix<0 ... attendu +96, obtenu -96   ← le seul cas faux
+qty>0 et prix<0 ... attendu -96, obtenu -96
+qty<0 et prix>0 ... attendu -96, obtenu -96
+```
+
+Le calcul du coeur est pourtant juste : `calcul_price_total(-1, -96)` renvoie bien **+96**. Le
+signe se perd entre cet appel et l'écriture de la ligne.
+
+**22 lignes** sont dans ce cas sur l'ensemble du gisement, pour **1 708,67 €**. Comptés en
+négatif, l'écart vaut le double : mesuré en production, **3 265 € de manque sur 20 000
+factures**, et jusqu'à 455,89 € sur un seul document — `F020045084`, dont la source vaut 5,57 €
+et que Dolibarr affichait à −450,32 €.
+
+La source elle-même ne calcule pas ces lignes : `DL_MontantHT` y vaut 0 quand `DL_Qte = -1` et
+`DL_PrixUnitaire = -96`.
+
+**Le contournement ne dénature rien** : inverser les deux facteurs laisse leur produit
+inchangé, et Dolibarr calcule alors juste. La ligne affiche une quantité positive au lieu de
+« −1 × −96 », ce qui est de surcroît plus lisible. Le rapport les dénombre.
+
+Placé **après** le report de la remise négative sur le prix : celui-ci peut lui-même rendre un
+prix négatif, et le contournement doit voir la valeur définitive.
+
+### Un script ponctuel pour réparer les factures déjà reprises
+
+La correction ci-dessus n'agit qu'à l'écriture : les factures déjà reprises gardent leur total
+faux. `scripts/fix_invoice_signs.php` les répare.
+
+```
+php fix_invoice_signs.php              dénombre et liste, sans rien modifier
+php fix_invoice_signs.php --confirm    applique
+```
+
+**Il ne supprime rien.** `is_erasable()` refuse de supprimer une facture qui n'est pas la
+dernière de sa séquence (commoninvoice.class.php:871) : au milieu de soixante mille documents,
+recréer les fautives supposerait d'emporter tout ce qui suit.
+
+La correction se fait donc en place — rouvrir si close, repasser en brouillon (seul état où
+`updateline()` travaille), inverser les deux signes, revalider, restaurer l'état payé. Chaque
+facture dans sa propre transaction : un échec n'entraîne que la sienne.
+
+**La référence survit**, et le script s'en assure : `setDraft()` ne touche que `fk_statut`, et
+`validate()` ne renumérote que si la référence commence par « PROV » (facture.class.php:3581).
+Un changement de référence fait échouer la facture concernée plutôt que de passer inaperçu.
+
+Éprouvé sur une facture validée reproduisant le cas :
+
+```
+AVANT   FA2608-53556   total -423,74 €
+APRÈS   FA2608-53556   total  +32,16 €   ← la valeur source exacte
+```
+
+Un second passage ne trouve plus rien : les lignes corrigées portent une quantité positive et
+ne remontent donc plus au repérage.
+
+
 ## [0.12.4] — 2026-08-12
 
 ### Un règlement sans date n'est plus perdu
