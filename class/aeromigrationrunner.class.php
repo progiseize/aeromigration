@@ -335,6 +335,16 @@ abstract class AeroMigrationRunner
     const SOURCE_DB_UNSET = "\0unset";
 
     /**
+     * Tables présentes dans chaque base source, relevées une fois pour toutes.
+     *
+     * Statique à dessein : la page de configuration instancie les seize scripts, qui partagent
+     * la même base source. L'inventaire est le même pour tous.
+     *
+     * @var array<string,array<string,bool>>
+     */
+    protected static $sourceTablesCache = array();
+
+    /**
      * Constructeur.
      *
      * @param DoliDB $db   Handler de base de données
@@ -405,6 +415,30 @@ abstract class AeroMigrationRunner
             return '';
         }
 
+        // La table principale, même quand $srcTable porte une jointure.
+        $table = preg_split('/\s/', trim($this->srcTable));
+        $table = $table[0];
+
+        // L'inventaire des tables est relu une fois par base, puis partagé par toutes les
+        // instances : la page de configuration en crée seize, et seize allers-retours pour
+        // poser seize fois la même question se paient sur un serveur distant.
+        if (!isset(self::$sourceTablesCache[$this->sourceDb])) {
+            $known = array();
+            $sql   = 'SELECT table_name AS tn FROM information_schema.tables WHERE table_schema = '
+                .($this->sourceDb !== '' ? "'".$this->db->escape($this->sourceDb)."'" : 'DATABASE()');
+            $resql = $this->db->query($sql, 1);
+            while ($resql && ($obj = $this->db->fetch_object($resql))) {
+                $known[strtolower($obj->tn)] = true;
+            }
+            self::$sourceTablesCache[$this->sourceDb] = $known;
+        }
+
+        if (isset(self::$sourceTablesCache[$this->sourceDb][strtolower($table)])) {
+            return '';
+        }
+
+        // La table n'a pas été vue : une lecture réelle dira si elle est absente ou seulement
+        // interdite — information_schema tait ce que l'utilisateur n'a pas le droit de voir.
         $resql = $this->db->query('SELECT 1 FROM '.$this->src($this->srcTable).' LIMIT 1', 1);
         if ($resql) {
             $this->db->free($resql);

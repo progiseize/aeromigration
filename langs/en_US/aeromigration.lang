@@ -41,3 +41,4 @@ AeroMigSourceDb=Source database
 AeroMigSourceDbHelp=Leave empty, or enter %s, if the legacy ERP tables sit alongside the Dolibarr ones — which is the case when hosting allows a single database only. Otherwise give the name of the database the export was loaded into. The --source-db= option of migrate.php still takes precedence, for one run.
 AeroMigSourceDbInvalid=Unusable database name: letters, digits and underscores only.
 AeroMigStatusNoSource=Source not found
+AeroMigComputeStatus=Compute migration status

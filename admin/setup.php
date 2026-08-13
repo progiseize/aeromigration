@@ -106,6 +106,24 @@ print '<br>';
 
 $scripts = aeromigrationGetScripts();
 
+// ── L'état ne se calcule que sur demande ───────────────────────────────────
+//
+// Mesurer l'avancement interroge la base seize fois, et certaines de ces requêtes portent sur
+// des centaines de milliers de lignes. Tant que la source et la cible partagent un serveur,
+// cela se compte en secondes ; dès qu'elles sont séparées — deux bases, deux collations —,
+// en minutes. La page devenait alors inutilisable, et le réglage qu'on venait y chercher
+// inaccessible : précisément celui qui aurait corrigé la situation.
+//
+// Elle s'affiche donc toujours, et le calcul se demande.
+
+$showStatus = (GETPOSTINT('status') === 1);
+
+if (!$showStatus) {
+    print '<div class="center"><a class="button" href="'.$_SERVER['PHP_SELF'].'?status=1">';
+    print $langs->trans('AeroMigComputeStatus').'</a></div>';
+    print '<br>';
+}
+
 print '<table class="noborder centpercent">';
 print '<tr class="liste_titre">';
 print '<td>'.$langs->trans('AeroMigScript').'</td>';
@@ -124,17 +142,21 @@ if (empty($scripts)) {
         // quel que soit l'environnement, et après une purge.
         $done        = -1;
         $sourceIssue = '';
-        dol_include_once($script['file']);
-        if (class_exists($script['class'])) {
-            $runner = new $script['class']($db, $user);
-            $done   = $runner->countMigrated();
-            // Une source injoignable ne se voyait qu'à un état « Indéterminé », qui pouvait
-            // aussi bien signifier une dépendance absente. Le dire explicitement évite de
-            // chercher du côté de la cible un défaut qui est du côté de la source.
-            $sourceIssue = $runner->sourceError();
+        if ($showStatus) {
+            dol_include_once($script['file']);
+            if (class_exists($script['class'])) {
+                $runner = new $script['class']($db, $user);
+                $done   = $runner->countMigrated();
+                // Une source injoignable ne se voyait qu'à un état « Indéterminé », qui pouvait
+                // aussi bien signifier une dépendance absente. Le dire explicitement évite de
+                // chercher du côté de la cible un défaut qui est du côté de la source.
+                $sourceIssue = $runner->sourceError();
+            }
         }
 
-        if ($sourceIssue !== '') {
+        if (!$showStatus) {
+            $status = '<span class="opacitymedium">—</span>';
+        } elseif ($sourceIssue !== '') {
             $status = '<span class="badge badge-status8 badge-status" title="'
                 .dol_escape_htmltag($sourceIssue).'">'.$langs->trans('AeroMigStatusNoSource').'</span>';
         } elseif ($done > 0) {

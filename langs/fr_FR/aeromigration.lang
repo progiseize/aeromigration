@@ -41,3 +41,4 @@ AeroMigSourceDb=Base source
 AeroMigSourceDbHelp=Laissez vide, ou indiquez %s, si les tables de l'ancien ERP cohabitent avec celles de Dolibarr — c'est le cas lorsque l'hébergement n'autorise qu'une seule base. Sinon, donnez le nom de la base où l'export a été chargé. L'option --source-db= de migrate.php reste prioritaire, le temps d'un lancement.
 AeroMigSourceDbInvalid=Nom de base non exploitable : lettres, chiffres et soulignés uniquement.
 AeroMigStatusNoSource=Source introuvable
+AeroMigComputeStatus=Calculer l'état des reprises

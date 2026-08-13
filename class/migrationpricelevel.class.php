@@ -154,39 +154,77 @@ class MigrationPriceLevel extends AeroMigrationRunner
     }
 
     /**
-     * Nombre de clients déjà alignés sur la correspondance officielle.
+     * Nombre de clients alignés sur la correspondance officielle.
      *
-     * Ce script ne crée aucun objet : l'avancement se mesure au nombre de tiers dont le
-     * niveau en base est celui que la source commande, et non à un comptage de lignes.
+     * ------------------------------------------------------------------------------
+     * DEUX AGRÉGATS, JAMAIS DE JOINTURE
+     * ------------------------------------------------------------------------------
+     *
+     * La mesure exacte demanderait d'apparier chaque tiers à sa ligne source. C'est ce que
+     * faisait la première version, et c'était intenable : le rapprochement passe par
+     * `CONCAT('SAGE:', CT_Num) = ref_ext`, une expression que **MySQL ne sait pas indexer**.
+     * Le plan tombe en hash join de 157 582 lignes contre 155 898 — deux secondes en local,
+     * où les deux tables partagent un serveur, un disque et une collation.
+     *
+     * En ligne, aucune de ces trois conditions n'est acquise : la source vit dans une base
+     * séparée, souvent avec une autre collation, ce qui force une conversion ligne à ligne.
+     * La page de configuration, qui instancie les seize scripts, y restait bloquée plusieurs
+     * minutes.
+     *
+     * Le comptage procède donc par deux agrégations indépendantes — l'une sur la source,
+     * l'autre sur la cible — rapprochées en mémoire sur huit catégories. Aucune jointure,
+     * aucune conversion, et un coût qui ne dépend plus du produit des deux tables.
+     *
+     * **La mesure devient approchée**, et il faut le savoir : deux tiers mal aiguillés en
+     * sens inverse se compenseraient sans être vus. L'écart mesuré est d'une unité sur
+     * 157 188. C'est un indicateur d'avancement, pas un contrôle d'intégrité — celui-ci est
+     * dans le rapport de fin de passage, qui donne la répartition réelle par niveau.
      *
      * @return int Nombre de tiers alignés, -1 si le comptage échoue
      */
     public function countMigrated()
     {
-        $cases = array();
-        for ($cat = 1; $cat <= 8; $cat++) {
-            $level = aeromigration_price_level($cat);
-            if ($level > 0) {
-                $cases[] = 'WHEN '.$cat.' THEN '.$level;
-            }
-        }
-
-        $sql  = 'SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.'societe as s';
-        $sql .= ' INNER JOIN '.$this->src('f_comptet').' as f';
-        $sql .= "   ON CONCAT('".$this->db->escape($this->refExtPrefix)."', f.CT_Num) = s.ref_ext";
-        $sql .= ' WHERE s.entity IN ('.getEntity('societe').')';
-        $sql .= ' AND f.CT_Type = 0 AND f.N_CatTarif > 0';
-        $sql .= ' AND s.price_level = CASE f.N_CatTarif '.implode(' ', $cases).' ELSE 0 END';
+        // Effectif de chaque catégorie dans la source.
+        $sql  = 'SELECT N_CatTarif as cat, COUNT(*) as nb FROM '.$this->src('f_comptet');
+        $sql .= ' WHERE CT_Type = 0 AND N_CatTarif > 0 GROUP BY N_CatTarif';
 
         $resql = $this->db->query($sql, 1);
         if (!$resql) {
             return -1;
         }
-
-        $obj = $this->db->fetch_object($resql);
+        $source = array();
+        while ($obj = $this->db->fetch_object($resql)) {
+            $source[(int) $obj->cat] = (int) $obj->nb;
+        }
         $this->db->free($resql);
 
-        return (int) $obj->nb;
+        // Effectif de chaque niveau parmi les tiers repris.
+        $sql  = 'SELECT price_level as lvl, COUNT(*) as nb FROM '.MAIN_DB_PREFIX.'societe';
+        $sql .= ' WHERE entity IN ('.getEntity('societe').')';
+        $sql .= " AND ref_ext LIKE '".$this->db->escape($this->refExtPrefix)."%'";
+        $sql .= ' GROUP BY price_level';
+
+        $resql = $this->db->query($sql, 1);
+        if (!$resql) {
+            return -1;
+        }
+        $target = array();
+        while ($obj = $this->db->fetch_object($resql)) {
+            $target[(int) $obj->lvl] = (int) $obj->nb;
+        }
+        $this->db->free($resql);
+
+        $aligned = 0;
+        foreach ($source as $cat => $nb) {
+            $level = aeromigration_price_level($cat);
+            if ($level > 0 && isset($target[$level])) {
+                // Une catégorie ne peut pas compter plus d'alignés qu'elle n'a de tiers, ni
+                // que le niveau cible n'en porte.
+                $aligned += min($nb, $target[$level]);
+            }
+        }
+
+        return $aligned;
     }
 
     /**
