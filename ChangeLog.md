@@ -6,6 +6,37 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.12.7] — 2026-08-13
+
+### Les produits naissent à leur date d'origine
+
+La fiche produit affichait la date de la reprise — **14 899 articles créés le 4 juin 2026** —
+alors que la source porte leur véritable date de création dans `AR_DateCreation`, de fin 2019
+à juillet 2026. L'ancienneté du catalogue était perdue.
+
+`Product::create()` respecte la date qu'on lui pose et ne retombe sur l'heure courante que si
+elle est vide (`product.class.php:1105`) : à la création, il suffit de la renseigner.
+
+**`Product::update()`, lui, n'écrit jamais `datec`.** Les articles déjà repris ne pouvaient
+donc pas être corrigés par un simple rejeu : le champ passe désormais par `setValueFrom()`,
+qui journalise l'auteur dans `fk_user_modif`. Un passage `product --update` rattrape ainsi tout
+le catalogue — **environ 15 300 fiches**.
+
+La date est relevée **avant** le mapping, faute de quoi la comparaison porterait sur la valeur
+que le mapping vient d'écraser. L'écriture n'a lieu qu'en cas d'écart réel, à la seconde près :
+sans cette garde, chaque passage réécrirait quinze mille lignes sans rien changer. Vérifié,
+second passage sans aucune écriture.
+
+**408 articles n'ont aucune date dans la source** et gardent celle de la reprise. Le rapport
+les dénombre, comme il dénombre les dates réalignées.
+
+Les produits adoptés de la boutique sont traités comme les autres : l'article existait dans
+l'ancien ERP avant que PrestaShop ne le connaisse, et c'est cette antériorité qui fait foi.
+
+Sans effet sur les tarifs : `Product::update()` n'écrit ni `price` ni `price_ttc`, les niveaux
+posés par `customerprice` sont hors d'atteinte.
+
+
 ## [0.12.6] — 2026-08-12
 
 ### L'agenda automatique est coupé pendant une reprise

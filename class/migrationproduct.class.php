@@ -95,6 +95,12 @@ class MigrationProduct extends AeroMigrationRunner
     /** @var array<int,bool> Produits déjà adoptés, pour n'en adopter aucun deux fois */
     protected $adoptedProductIds = array();
 
+    /** @var int Dates de création réalignées sur celle de l'ancien ERP */
+    protected $creationDateFixed = 0;
+
+    /** @var int Articles dont la source ne porte aucune date de création */
+    protected $creationDateMissing = 0;
+
 
     /** @var string Table Dolibarr cible */
     protected $dstTable = 'product';
@@ -646,6 +652,10 @@ class MigrationProduct extends AeroMigrationRunner
                 throw new Exception('Produit introuvable (rowid '.$existingId.') : '.$this->objectErrors($product));
             }
 
+            // Relevée avant le mapping : c'est la valeur réellement en base, seule
+            // comparable à celle de la source.
+            $currentDate = (int) $product->date_creation;
+
             $this->mapFields($product, $row);
 
             if ($product->update($existingId, $this->user) <= 0) {
@@ -653,6 +663,7 @@ class MigrationProduct extends AeroMigrationRunner
             }
 
             $this->applyCategory($product, $row);
+            $this->applySourceCreationDate($product, $row, $currentDate);
 
             return array('action' => 'updated', 'id' => $existingId);
         }
@@ -683,6 +694,8 @@ class MigrationProduct extends AeroMigrationRunner
                 throw new Exception('Produit boutique introuvable (rowid '.$adoptedId.') : '.$this->objectErrors($product));
             }
 
+            $currentDate = (int) $product->date_creation;
+
             $this->mapFields($product, $row, true);
             $product->ref_ext = $this->buildRefExt($this->getSourceKey($row));
 
@@ -691,6 +704,10 @@ class MigrationProduct extends AeroMigrationRunner
             }
 
             $this->applyCategory($product, $row);
+
+            // Le produit adopté vient de la boutique, mais l'article existait dans l'ancien
+            // ERP avant elle : c'est cette antériorité-là qui fait foi.
+            $this->applySourceCreationDate($product, $row, $currentDate);
 
             unset($this->productByPrestaId[$prestaId]);
             $this->adoptedProductIds[$adoptedId] = true;
@@ -704,11 +721,19 @@ class MigrationProduct extends AeroMigrationRunner
         $this->mapFields($product, $row);
         $product->ref_ext = $this->buildRefExt($this->getSourceKey($row));
 
+        // `create()` insère cette valeur telle quelle et ne retombe sur l'heure courante que
+        // si elle est vide (product.class.php:1105) : le produit naît à sa date d'origine.
+        $product->date_creation = $this->sourceCreationDate($row);
+
         if ($product->create($this->user) <= 0) {
             throw new Exception('Échec de la création : '.$this->objectErrors($product));
         }
 
         $this->applyCategory($product, $row);
+
+        // Sans écart à corriger — `create()` vient d'écrire la bonne date —, mais l'appel
+        // tient le décompte des articles que la source laisse sans date.
+        $this->applySourceCreationDate($product, $row, (int) $product->date_creation);
 
         // Le cache des références suit les créations : si la source contient deux fois la
         // même référence, la seconde sera rattachée au lieu d'échouer sur l'unicité.
@@ -719,6 +744,61 @@ class MigrationProduct extends AeroMigrationRunner
         $this->registerPrestaLink((int) $product->id, $row);
 
         return array('action' => 'created', 'id' => (int) $product->id);
+    }
+
+    /**
+     * Date de création portée par la source, ou 0 si elle n'en porte aucune.
+     *
+     * @param stdClass $row Ligne source
+     * @return int Timestamp, 0 si absent ou inexploitable
+     */
+    protected function sourceCreationDate($row)
+    {
+        if (empty($row->AR_DateCreation)) {
+            return 0;
+        }
+
+        $date = $this->db->jdate($row->AR_DateCreation);
+
+        return ($date > 0) ? (int) $date : 0;
+    }
+
+    /**
+     * Aligne la date de création du produit sur celle de l'ancien ERP.
+     *
+     * `Product::create()` respecte `date_creation` si elle est posée avant l'appel
+     * (product.class.php:1105) — la création n'a donc rien à faire ici. **`Product::update()`,
+     * lui, n'écrit jamais `datec`** : sur un produit déjà en base, la seule voie du cœur est
+     * `setValueFrom()`, qui journalise l'auteur dans `fk_user_modif`.
+     *
+     * L'écriture n'a lieu qu'en cas d'écart réel, à la seconde près : sans cette garde, un
+     * passage `--update` réécrirait quinze mille lignes sans rien changer.
+     *
+     * @param Product  $product     Produit persisté
+     * @param stdClass $row         Ligne source
+     * @param int      $currentDate Date de création lue en base AVANT le mapping
+     * @return void
+     * @throws Exception Si l'écriture est refusée
+     */
+    protected function applySourceCreationDate(Product $product, $row, $currentDate)
+    {
+        $wanted = $this->sourceCreationDate($row);
+        if ($wanted <= 0) {
+            $this->creationDateMissing++;
+            return;
+        }
+
+        if ((int) $currentDate === $wanted) {
+            return;
+        }
+
+        $result = $product->setValueFrom('datec', $wanted, 'product', (int) $product->id, 'date', 'rowid', $this->user);
+        if ($result < 0) {
+            throw new Exception('Date de création refusée : '.$this->objectErrors($product));
+        }
+
+        $product->date_creation = $wanted;
+        $this->creationDateFixed++;
     }
 
     /**
@@ -913,13 +993,9 @@ class MigrationProduct extends AeroMigrationRunner
             $product->array_options['options_aerotb_editeur'] = $editor;
         }
 
-        // Date de création d'origine : sans objet pour un produit qui existe déjà.
-        if (!$fillOnly && !empty($row->AR_DateCreation)) {
-            $date = $this->db->jdate($row->AR_DateCreation);
-            if ($date > 0) {
-                $product->date_creation = $date;
-            }
-        }
+        // La date de création est traitée à part, par applySourceCreationDate() : la poser
+        // ici serait trompeur en mise à jour, où elle écraserait la valeur lue en base sans
+        // que rien ne soit persisté — `Product::update()` n'écrit jamais `datec`.
 
         // ── Extrafields aerotoolbox ────────────────────────────────────────
         // Disponibilité et suivi alimentent les champs déjà en place sur la fiche produit.
@@ -1170,6 +1246,21 @@ class MigrationProduct extends AeroMigrationRunner
                 foreach (array_slice($this->barcodeInvalid, 0, 6, true) as $value => $nb) {
                     $lines[] = '            '.str_pad('« '.$value.' »', 28).$nb.' article(s)';
                 }
+            }
+        }
+
+        if ($this->creationDateFixed > 0 || $this->creationDateMissing > 0) {
+            if ($lines) {
+                $lines[] = '';
+            }
+            $lines[] = 'Date de création';
+            if ($this->creationDateFixed > 0) {
+                $lines[] = '  '.str_pad((string) $this->creationDateFixed, 6, ' ', STR_PAD_LEFT)
+                    .'  produit(s) ramené(s) à leur date d\'origine (AR_DateCreation)';
+            }
+            if ($this->creationDateMissing > 0) {
+                $lines[] = '  '.str_pad((string) $this->creationDateMissing, 6, ' ', STR_PAD_LEFT)
+                    .'  article(s) sans date dans la source : date de reprise conservée';
             }
         }
 
