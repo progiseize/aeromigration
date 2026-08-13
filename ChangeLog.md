@@ -6,6 +6,42 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.12.6] — 2026-08-12
+
+### L'agenda automatique est coupé pendant une reprise
+
+Dolibarr consigne dans l'agenda chaque validation de document et chaque règlement. Sur une
+reprise, cela se paie trois fois — et la première a fait échouer un document en production.
+
+**Des échecs.** `llx_actioncomm` devient un point de contention, et l'insertion finit par se
+heurter aux autres :
+
+```
+[FAC253291] Validation refusée : Failed to insert event :
+            Deadlock found when trying to get lock; try restarting transaction
+```
+
+Le document entier est annulé par le rollback, alors qu'il n'avait rien de fautif.
+
+**Du temps.** Deux écritures de plus par facture, dans une table qui comptait déjà
+**976 072 lignes** avant que la reprise commence, dont 267 321 rattachées à une facture.
+
+**Un agenda inutilisable.** Les 182 781 factures et leurs 110 000 règlements y ajouteraient
+près de **300 000 événements** « Facture validée » datés de 2015 à 2026. Ils n'apprennent rien
+à personne et noient l'historique réel du client.
+
+La coupure est faite **en mémoire, jamais en base** : l'application retrouve son agenda intact
+dès la requête suivante. Aucune donnée métier n'y est perdue — un événement d'agenda constate
+une action, il ne la porte pas.
+
+Elle vise **toutes** les constantes `MAIN_AGENDA_ACTIONAUTO_*` sans les énumérer : elles
+varient selon les modules activés, et en oublier une suffirait à ramener le problème. Sur
+l'instance de reprise, **153 étaient actives**.
+
+Placée dans le socle et non dans un script : commandes, réceptions et factures produisent
+toutes des événements.
+
+
 ## [0.12.5] — 2026-08-12
 
 ### Quantité et prix tous deux négatifs : Dolibarr se trompe de signe

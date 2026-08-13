@@ -272,6 +272,9 @@ abstract class AeroMigrationRunner
      */
     public $referenceDate = 0;
 
+    /** @var int Constantes d'agenda automatique coupées le temps du passage */
+    protected $agendaSilenced = 0;
+
     /**
      * Condition SQL ajoutée au filtre de lecture du script.
      *
@@ -397,6 +400,54 @@ abstract class AeroMigrationRunner
         // renommée : on ramène ce cas au comportement « pas de préfixe ».
         if ($this->sourceDb !== '' && $this->sourceDb === $this->db->database_name) {
             $this->sourceDb = '';
+        }
+    }
+
+    /**
+     * Coupe l'agenda automatique le temps du passage.
+     *
+     * ------------------------------------------------------------------------------
+     * TROIS RAISONS, DONT UNE QUI FAIT ÉCHOUER DES DOCUMENTS
+     * ------------------------------------------------------------------------------
+     *
+     * Dolibarr consigne dans l'agenda chaque validation de document et chaque règlement, si
+     * les constantes `MAIN_AGENDA_ACTIONAUTO_*` sont posées. Sur une reprise, cela se paie
+     * trois fois :
+     *
+     * - **des échecs.** `llx_actioncomm` devient un point de contention, et l'insertion finit
+     *   par se heurter aux autres : « Failed to insert event : Deadlock found when trying to
+     *   get lock ». Rencontré en production sur la reprise des factures — le document entier
+     *   est alors annulé, alors qu'il n'avait rien de fautif ;
+     *
+     * - **du temps.** Deux écritures de plus par facture, dans une table qui comptait déjà
+     *   976 072 lignes avant que la reprise commence ;
+     *
+     * - **un agenda inutilisable.** Les 182 781 factures et leurs 110 000 règlements y
+     *   ajouteraient près de 300 000 événements « Facture validée » datés de 2015 à 2026. Ils
+     *   n'apprennent rien à personne et noient l'historique réel du client.
+     *
+     * La coupure est faite EN MÉMOIRE, jamais en base : l'application retrouve son agenda
+     * intact dès la requête suivante. Aucune donnée métier n'y est perdue — un événement
+     * d'agenda constate une action, il ne la porte pas.
+     *
+     * Toutes les constantes de la famille sont visées, sans les énumérer : elles varient selon
+     * les modules activés, et en oublier une suffirait à ramener le problème.
+     *
+     * @return void
+     */
+    protected function silenceAutomaticAgenda()
+    {
+        global $conf;
+
+        if (empty($conf->global)) {
+            return;
+        }
+
+        foreach (get_object_vars($conf->global) as $name => $value) {
+            if (strpos($name, 'MAIN_AGENDA_ACTIONAUTO_') === 0 && !empty($value)) {
+                $conf->global->$name = 0;
+                $this->agendaSilenced++;
+            }
         }
     }
 
@@ -769,6 +820,8 @@ abstract class AeroMigrationRunner
     {
         $this->stats  = array('read' => 0, 'created' => 0, 'adopted' => 0, 'updated' => 0, 'skipped' => 0, 'error' => 0);
         $this->errors = array();
+
+        $this->silenceAutomaticAgenda();
 
         // Avant tout le reste : une source injoignable ne doit pas se traduire par un
         // parcours vide, qui se confondrait avec une reprise déjà faite.
