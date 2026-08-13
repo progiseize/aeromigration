@@ -8,8 +8,65 @@ et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [0.12.0] — 2026-08-12
 
-Deux chantiers, restés jusqu'ici hors publication : la reprise des **factures clients et de
-leurs règlements**, et celle des **tarifs de vente par catégorie**.
+Trois chantiers, restés jusqu'ici hors publication : la reprise des **factures clients et de
+leurs règlements**, celle des **tarifs de vente par catégorie**, et celle des **réceptions
+fournisseur**.
+
+---
+
+### Réceptions fournisseur
+
+Nouveau script `reception`, sur le **type 13** du domaine achat — la source ne numérote pas ses
+types comme le domaine vente, où la commande est 12 et la facture 16. **2 852 documents retenus,
+22 849 lignes, 387 502 unités.**
+
+**Les factures fournisseur ne sont pas reprises, et ne le seront pas.** Le client ne les a
+jamais gérées, ce que la source confirme : sur ses 2 139 factures d'achat, `z_docregl_global`
+ne porte **qu'un seul règlement** — 478,19 €, et sur une commande. `f_docregl` est vide,
+`DR_Regle` vaut 0 partout, `Z_Solde` vaut « N » sur l'intégralité du gisement.
+
+#### Le stock ne bouge pas, et c'était la condition de tout
+
+`Reception::valid()` ne mouvemente le stock que si `STOCK_CALCULATE_ON_RECEPTION` est posée.
+Elle ne l'est pas, et le script **refuse de démarrer** si elle venait à l'être : sans cette
+garantie, les 22 849 lignes s'ajouteraient au stock d'ouverture déjà repris et le doubleraient
+de 387 502 unités, sans que rien ne le signale avant l'inventaire suivant. Vérifié après
+reprise : 165 588 unités avant, 165 588 après.
+
+⚠️ **Ne clôturez pas ces réceptions.** `STOCK_CALCULATE_ON_RECEPTION_CLOSE` vaut 1 — non par
+configuration mais parce que le coeur la force dès que le module lots/séries est actif
+(conf.class.php:963). L'écrire à 0 en base ne sert à rien, la valeur étant réimposée à chaque
+chargement. Elle ne joue qu'à la clôture, que le script ne fait pas ; la faire à l'écran, si.
+Le rapport le rappelle à chaque passage.
+
+#### Deux façons d'écrire une ligne
+
+Dolibarr adosse structurellement une ligne de réception à une **ligne de commande** :
+`addline()` prend un `fk_commandefourndet` qu'elle relit pour en déduire l'article. C'est la
+voie complète — 20 109 lignes, avec entrepôt et lien.
+
+Mais 327 réceptions ne citent aucune commande. Leurs 2 563 lignes passent par `addlinefree()`,
+qui accepte un article et une quantité sans commande, au prix d'une limite assumée : **elle
+n'écrit ni l'entrepôt ni le prix**. Sans conséquence ici, les réceptions étant toutes sur le
+dépôt principal.
+
+L'appariement se fait sur l'article, la source ne conservant pas le numéro de la ligne
+d'origine. **448 couples (commande, article) portent plusieurs lignes** — un même article
+commandé deux fois, à deux prix : la première l'emporte, par `rowid` croissant.
+
+#### Ce qui est écarté
+
+**291 réceptions annulées.** L'objet Reception n'a que trois statuts — brouillon, validée,
+close — et **aucun équivalent d'« abandonnée »**, contrairement aux factures. Les faire figurer
+validées laisserait croire à une entrée de marchandise qui n'a pas eu lieu.
+
+**Quatre documents sans ligne**, que `valid()` refuse et qui n'apprennent rien.
+
+#### Les statuts de commande sont recalculés
+
+Valider une réception fait recalculer par le coeur ce qui a été reçu. Les statuts posés par
+déduction lors de la reprise des commandes cèdent la place aux réceptions réelles : 422
+commandes passent en « reçue partiellement », 1 610 en « reçue totalement ».
 
 ---
 
@@ -74,10 +131,22 @@ Leur moyen de paiement n'est pas perdu pour autant — il est écrit en toutes l
 **1 539 annoncent « Carte Bancaire Internet », pour 141 005 €**. Lire le libellé vaut mieux
 que se rabattre sur un mode choisi d'avance.
 
-L'ancien ERP distingue trois canaux de carte — internet, magasin, téléphone — là où Dolibarr
-n'a qu'un code `CB`. Les modes `CBNET` et `CBMAG` posés par `aerotoolbox` 1.5.7 sont employés
-s'ils existent et sont actifs ; sinon tout retombe sur `CB` sans que la reprise s'interrompe.
-La distinction est une amélioration, pas une condition.
+L'ancien ERP distingue **quatre** canaux de carte — magasin, internet, téléphone, et un
+terminal portable pour les ventes hors des murs — là où Dolibarr n'a qu'un code `CB`. Les modes
+`CBNET` et `CBMAG` posés par `aerotoolbox` 1.5.7 sont employés s'ils existent et sont actifs ;
+sinon tout retombe sur `CB` sans que la reprise s'interrompe. La distinction est une
+amélioration, pas une condition.
+
+Deux indices de la source n'ont **aucune entrée dans son propre dictionnaire** :
+
+- **l'indice 0**, 1 540 règlements pour 141 051,05 €, de 2019 à 2020 — le champ n'était pas
+  alimenté avant 2021. Ils sont rattrapés par le libellé (voir ci-dessus) ;
+- **l'indice 6**, 110 règlements pour 15 114,21 €, de 2019 à 2022 : un fourre-tout de
+  régularisations — « Remise marché non appliquée », « Geste commercial », « DETAXE accordée
+  le 22/08 », et 43 lignes sans libellé. Ce ne sont pas des encaissements ; ils sont écartés.
+
+Restent les indices 5 et 9, qui sont des avoirs et relèvent de la compensation entre pièces,
+non du paiement. La couverture est donc complète et chaque manque est intentionnel.
 
 #### Purger dans l'ordre inverse, et rouvrir avant de défaire
 
@@ -204,8 +273,57 @@ Comptez un quart d'heure.
 
 #### Corrigé
 
+- **Huit scripts sur seize ne savaient plus lire leur source.** `thirdparty`, `contact`,
+  `newsletter`, `category`, `product`, `supplierprice`, `supplierorder` et `customerorder`
+  n'avaient pas de `$sourceDb` et cherchaient les tables `f_*` dans la base de Dolibarr, où
+  elles ne sont plus depuis que l'éditeur a livré son dossier entier. Lancés tels quels, ils
+  échouaient — leur page d'administration affichait un comptage négatif sans dire pourquoi.
+
+  Poser la propriété ne suffisait pas : quatre lectures échappaient encore à `src()`.
+  Elles étaient invisibles à une recherche sur le nom des tables, car écrites
+  `FROM '.$this->srcTable`. La plus coûteuse était celle de `product`, qui rendait
+  `prepare()` muet et faisait lire **zéro ligne** sur 15 908.
+
+  Trois cas particuliers ont demandé davantage :
+
+  - `contact` a pour source une **jointure**, que `src()` ne pouvait pas qualifier — elle
+    n'aurait préfixé que la première table. La jointure est désormais bâtie dans une
+    surcharge de `src()`, appelée au bon moment : `--source-db` n'est appliquée qu'après
+    l'instanciation, une composition faite dans le constructeur garderait l'ancienne base ;
+  - `newsletter` joignait `f_comptet` en dur dans sa purge ;
+  - `stock` faisait de même avec `f_artstock`, alors qu'il portait pourtant `$sourceDb`.
+
+  Les seize scripts comptent maintenant leur source et déroulent une simulation sans erreur.
+
+- **La base source se règle depuis la configuration du module**, et non plus dans le code. La
+  constante `AEROMIG_SOURCE_DB` prime sur la valeur que chaque script déclare ; désigner la
+  base de Dolibarr, ou laisser le champ vide, revient à ne plus qualifier les lectures — le
+  cas d'un hébergement mono-base comme Plesk, qui donne une base par site avec son propre
+  phpMyAdmin. L'option `--source-db=` reste prioritaire le temps d'un lancement.
+
+  « Constante vide » et « constante jamais posée » sont deux choses différentes : la première
+  est un réglage, la seconde une absence de réglage. Le socle les distingue par une sentinelle,
+  sans quoi l'hébergement mono-base aurait été inatteignable.
+
+- **Une source injoignable est désormais annoncée.** Avant tout parcours, le script vérifie que
+  sa table source répond, et s'arrête sinon en disant quelle base il a interrogée et quoi
+  corriger. Auparavant, une base mal réglée ne produisait qu'un « 0 enregistrement » — qui se
+  confond avec une reprise déjà faite — et un état « Indéterminé » sur la page d'administration,
+  lequel pouvait tout aussi bien signaler une dépendance absente. C'est ce silence qui avait
+  laissé huit scripts inopérants sans que personne le remarque.
+
+- **`migrate.php` relève `memory_limit` à 2 Go.** Le script `invoice` précharge 525 402 lignes
+  et mourait à 512 Mo — sans autre trace qu'une sortie tronquée et un code 255, l'erreur fatale
+  échappant au bloc `try` donc au rapport. Une limite déjà plus généreuse est respectée.
+
 - `MigrationThirdparty::applyPriceLevel()` recopiait `N_CatTarif` tel quel dans `price_level`.
   Elle passe désormais par `aeromigration_price_level()`.
+- `MigrationInvoice` ignorait **l'indice de règlement 10** — « CB Portable / extérieur »,
+  34 règlements pour 6 908,84 €, de mars 2024 à mars 2025. Il figure pourtant au dictionnaire
+  de la source ; c'est la table de correspondance qui l'omettait. Ses libellés ne l'auraient pas
+  rattrapé — 28 sont vides — et il tombait donc en mode inconnu, sans être repris. Il rejoint la
+  carte magasin : un terminal portable encaisse en présentiel. Aucune perte constatée, le premier
+  lot de 24 993 factures ne couvrant que des exercices antérieurs.
 
 
 ## [0.11.0] — 2026-08-03

@@ -47,6 +47,9 @@ class MigrationProduct extends AeroMigrationRunner
     /** @var string Clé de traduction du libellé */
     public $label = 'AeroMigScriptProduct';
 
+    /** @var string Les tables de l'ancien ERP ne sont pas dans la base de Dolibarr */
+    public $sourceDb = 'aeroprod';
+
     /** @var string Table source */
     protected $srcTable = 'f_article';
 
@@ -574,7 +577,7 @@ class MigrationProduct extends AeroMigrationRunner
      */
     protected function prepareCategories()
     {
-        $sql   = "SELECT DISTINCT FA_CodeFamille FROM ".$this->srcTable;
+        $sql   = "SELECT DISTINCT FA_CodeFamille FROM ".$this->src($this->srcTable);
         $sql  .= " WHERE TRIM(COALESCE(FA_CodeFamille,'')) <> ''";
         $resql = $this->db->query($sql);
         if (!$resql) {

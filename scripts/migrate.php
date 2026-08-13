@@ -68,6 +68,29 @@ if (substr($sapi_type, 0, 3) === 'cgi') {
     exit(1);
 }
 
+// Les scripts qui préchargent les lignes de leurs documents dépassent le plafond CLI usuel :
+// « invoice » charge 525 402 lignes et meurt à 512 Mo, sans autre message qu'une sortie
+// tronquée et un code 255 — l'erreur fatale échappe au bloc try, donc au rapport.
+//
+// La limite est relevée plutôt que laissée au hasard de l'environnement : c'est un outil
+// d'administration lancé à la main, pas une page servie à un visiteur. Une valeur déjà plus
+// généreuse, ou son absence de limite, est respectée.
+$currentLimit = trim((string) ini_get('memory_limit'));
+if ($currentLimit !== '' && $currentLimit !== '-1') {
+    $unit  = strtolower(substr($currentLimit, -1));
+    $bytes = (int) $currentLimit;
+    if ($unit === 'g') {
+        $bytes *= 1024 * 1024 * 1024;
+    } elseif ($unit === 'm') {
+        $bytes *= 1024 * 1024;
+    } elseif ($unit === 'k') {
+        $bytes *= 1024;
+    }
+    if ($bytes > 0 && $bytes < 2 * 1024 * 1024 * 1024) {
+        @ini_set('memory_limit', '2048M');
+    }
+}
+
 require_once $path.'../../../master.inc.php';
 require_once DOL_DOCUMENT_ROOT.'/user/class/user.class.php';
 
@@ -238,6 +261,22 @@ $runner->startCursor = $cursor;
 // base de Dolibarr quand l'hébergement n'en autorise qu'une.
 if ($sourceDbSet) {
     $runner->sourceDb = $sourceDb;
+    // Même règle que dans le constructeur : désigner la base de Dolibarr revient à ne pas
+    // qualifier du tout.
+    if ($runner->sourceDb === $db->database_name) {
+        $runner->sourceDb = '';
+    }
+}
+
+// Une source injoignable est annoncée ici plutôt que découverte par un parcours vide, qui
+// se confondrait avec une reprise déjà faite. Le message dit quoi corriger.
+$sourceError = $runner->sourceError();
+if ($sourceError !== '') {
+    echo "Script          : ".$langs->trans($definition['label'])." (".$definition['code'].")\n";
+    echo "Base source     : ".($runner->sourceDb !== '' ? $runner->sourceDb : $db->database_name
+        ." (celle de Dolibarr)")."\n\n";
+    echo $sourceError."\n";
+    exit(1);
 }
 
 // --update force la mise à jour, mais son absence ne doit pas écraser le réglage d'un

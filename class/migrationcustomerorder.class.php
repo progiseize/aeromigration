@@ -64,6 +64,9 @@ class MigrationCustomerOrder extends AeroMigrationRunner
     /** @var string Clé de traduction du libellé */
     public $label = 'AeroMigScriptCustomerOrder';
 
+    /** @var string Les tables de l'ancien ERP ne sont pas dans la base de Dolibarr */
+    public $sourceDb = 'aeroprod';
+
     /** @var string Table source */
     protected $srcTable = 'f_docentete_global';
 

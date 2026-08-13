@@ -608,7 +608,7 @@ class MigrationProductLocation extends AeroMigrationRunner
             $lines[] = '  existent dans f_article. Certains n\'y figurent pas : ce sont des lignes';
             $lines[] = '  de stock orphelines, un rangement pour un article disparu, et aucune';
             $lines[] = '  reprise ne les fera apparaître. Vérifiez avant de relancer :';
-            $lines[] = '     SELECT AR_Ref FROM f_article WHERE AR_Ref IN (…);';
+            $lines[] = '     SELECT AR_Ref FROM '.$this->src('f_article').' WHERE AR_Ref IN (…);';
             if (!empty($this->missingSamples)) {
                 $lines[] = '     '.implode(', ', $this->missingSamples)
                     .($this->missingProduct > count($this->missingSamples) ? ', …' : '');

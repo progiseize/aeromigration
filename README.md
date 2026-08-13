@@ -36,6 +36,7 @@ php migrate.php productlocation emplacement de rangement → fiche produit
 php migrate.php supplierorder  commandes fournisseur → relient tiers et articles
 php migrate.php customerorder  commandes clients → adopte celles de la boutique
 php migrate.php invoice        factures et règlements → rattachés à leur commande
+php migrate.php reception      réceptions fournisseur → adossées aux lignes de commande
 php migrate.php pricelevel     catégorie tarifaire des clients
 php migrate.php customerprice  tarifs de vente, les huit niveaux
 ```
@@ -50,19 +51,71 @@ L'éditeur a livré son dossier entier — 347 tables — chargé dans une base 
 [scripts/import_add_csv.php](scripts/import_add_csv.php). Les scripts qui la lisent portent
 `$sourceDb`, que l'option **`--source-db=NOM`** permet de changer.
 
-`warehouse`, `location`, `stock` et `productlocation` s'y appuient. Les autres lisent encore
-les tables importées à côté des `llx_*` : l'écart n'est pas anodin — sur `f_artstock`, 1 401
-quantités diffèrent et 97 articles s'ajoutent — mais les basculer demande de les éprouver un
-par un.
+**Les seize scripts s'y appuient désormais.** Huit ne le faisaient pas et cherchaient les
+tables `f_*` dans la base de Dolibarr, où elles ne sont plus : ils échouaient sans autre signe
+qu'un comptage négatif sur la page d'administration.
 
-**Quand l'hébergement n'autorise qu'une base**, ce qui est le cas sous Plesk, les tables de
-l'ancien ERP sont importées dans celle de Dolibarr. Aucune ne porte le préfixe `llx_`, la
-cohabitation est donc sans risque. Il faut alors le dire aux scripts, avec une option **sans
-valeur** :
+Si vous ajoutez un script, retenez la règle : **toute lecture de la source passe par `src()`**,
+y compris dans les requêtes d'index que le script écrit lui-même. Les oublis les plus tenaces
+s'écrivent `FROM '.$this->srcTable` — invisibles à une recherche sur le nom des tables.
+
+**Quand l'hébergement n'autorise qu'une base**, ce qui est le cas sous Plesk — une base par
+site, avec son propre phpMyAdmin —, les tables de l'ancien ERP sont importées dans celle de
+Dolibarr. Aucune ne porte le préfixe `llx_`, la cohabitation est donc sans risque, mais il
+faut le dire aux scripts.
+
+**Le réglage se fait depuis la page de configuration du module**, champ « Base source ». Il
+alimente la constante `AEROMIG_SOURCE_DB`, qui prime sur la valeur déclarée par chaque script :
+
+| Valeur | Effet |
+|---|---|
+| vide, ou le nom de la base de Dolibarr | les tables source sont lues sans être qualifiées — **cas Plesk** |
+| un autre nom de base | les lectures sont préfixées par cette base |
+| constante jamais posée | chaque script garde la base qu'il déclare, `aeroprod` |
+
+Vide et « jamais posée » ne veulent donc **pas** dire la même chose : la première est un
+réglage, la seconde une absence de réglage. Le module les distingue.
+
+L'option `--source-db=NOM` reste prioritaire, le temps d'un lancement :
 
 ```
-php migrate.php stock --source-db=
+php migrate.php stock --source-db=          # forcer la base de Dolibarr
+php migrate.php stock --source-db=aeroprod  # forcer une base séparée
 ```
+
+**Une source injoignable est annoncée, pas subie.** Avant tout parcours, le script vérifie que
+sa table source répond, et refuse de démarrer sinon — en disant quelle base il a interrogée et
+quoi corriger. Sans ce contrôle, une base mal réglée se traduisait par « 0 enregistrement », ce
+qui se confond avec une reprise déjà faite. La page de configuration signale de même les
+scripts dont la source ne répond pas.
+
+### Il n'y a pas d'identifiants à renseigner
+
+**Le module n'ouvre aucune connexion.** Il lit la source par celle de Dolibarr, et `src()` ne
+fait que préfixer le nom de la base : `` `base_source`.f_article ``. C'est un choix, pas un
+oubli — une seconde connexion imposerait de stocker un mot de passe de plus, et interdirait
+d'écrire une jointure entre la source et les `llx_*`, ce que plusieurs scripts font.
+
+Conséquence quand la source vit dans une base séparée, avec son propre compte MySQL — le cas
+sous Plesk, où chaque base reçoit son utilisateur dédié : **c'est l'utilisateur de Dolibarr qui
+doit pouvoir lire les deux.** Le sien suffit, celui de la base source ne sert à rien.
+
+Sous Plesk, sans SQL : **Bases de données → la base source → Utilisateurs → Ajouter** un
+utilisateur existant, celui de Dolibarr. Les bases d'un même abonnement partageant le serveur
+MySQL, la lecture croisée fonctionne aussitôt.
+
+Avec un accès administrateur, l'équivalent en SQL :
+
+```sql
+GRANT SELECT ON `base_source`.* TO 'utilisateur_dolibarr'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+`SELECT` suffit : aucun script n'écrit dans la source. Le droit peut être retiré la reprise
+terminée.
+
+Le diagnostic distingue ce cas des autres : une erreur MySQL 1044 ou 1142 produit un message
+qui parle de droits, non de configuration.
 
 ### L'emplacement n'est pas un entrepôt
 
@@ -292,9 +345,19 @@ Ce fichier se complète au fur et à mesure de l'écriture des scripts.
 
 ## Documents commerciaux
 
-Trois familles sont reprises : **commandes clients**, **commandes fournisseur**, et
-**factures clients avec leurs règlements**. Les devis, bons de livraison et retours ne le sont
-pas — leur intérêt rétrospectif est faible et le périmètre reste à arbitrer avec le client.
+Quatre familles sont reprises : **commandes clients**, **commandes fournisseur**, **factures
+clients avec leurs règlements**, et **réceptions fournisseur**. Les devis, bons de livraison et
+retours ne le sont pas — leur intérêt rétrospectif est faible et le périmètre reste à arbitrer
+avec le client.
+
+**Les factures fournisseur ne sont pas reprises, et ne le seront pas** : le client ne les a
+jamais gérées dans l'ancien ERP. La source le confirme — sur ses 2 139 factures d'achat,
+`z_docregl_global` ne porte qu'un seul règlement, et sur une commande. Seul l'historique des
+réceptions a été demandé.
+
+⚠️ **Les réceptions reprises doivent rester au statut validé.** Les clôturer ajouterait leurs
+387 502 unités au stock d'ouverture : `STOCK_CALCULATE_ON_RECEPTION_CLOSE` vaut 1, imposée par
+le coeur du fait du module lots/séries, et ne peut pas être désactivée.
 
 L'analyse préalable des quatre tables est dans [DOCUMENTS.md](DOCUMENTS.md) : nomenclature des
 types, colonnes exploitables, volumétrie et correspondance avec les objets Dolibarr. Elle tenait

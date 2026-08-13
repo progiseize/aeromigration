@@ -32,6 +32,9 @@ class MigrationNewsletter extends AeroMigrationRunner
     /** @var string Clé de traduction du libellé */
     public $label = 'AeroMigScriptNewsletter';
 
+    /** @var string Les tables de l'ancien ERP ne sont pas dans la base de Dolibarr */
+    public $sourceDb = 'aeroprod';
+
     /** @var string Table source */
     protected $srcTable = 'f_comptet';
 
@@ -127,7 +130,7 @@ class MigrationNewsletter extends AeroMigrationRunner
         // Les tiers que la source déclare désinscrits, et qui sont effectivement inscrits
         // sur la liste d'exclusion des envois.
         $sql  = 'SELECT s.rowid FROM '.MAIN_DB_PREFIX.'societe as s';
-        $sql .= ' INNER JOIN f_comptet as f ON CONCAT(\''.$this->db->escape($this->refExtPrefix).'\', f.CT_Num) = s.ref_ext';
+        $sql .= ' INNER JOIN '.$this->src('f_comptet').' as f ON CONCAT(\''.$this->db->escape($this->refExtPrefix).'\', f.CT_Num) = s.ref_ext';
         $sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'mailing_unsubscribe as u ON u.email = s.email';
         $sql .= '   AND u.entity IN ('.getEntity('mailing', 0).')';
         $sql .= ' WHERE s.entity IN ('.getEntity('societe').')';

@@ -523,7 +523,16 @@ class MigrationInvoice extends AeroMigrationRunner
             4 => isset($byCode['VIR']) ? $byCode['VIR'] : 0,   // Virements
             7 => $net,                                          // CB internet
             8 => $cb,                                           // CB téléphone
+            10 => $mag,                                         // CB portable / extérieur
         );
+
+        // L'indice 10 mérite un mot : « CB Portable / extérieur » désigne un terminal mobile,
+        // donc un encaissement en présentiel hors des murs — 34 règlements, 6 908,84 €, entre
+        // mars 2024 et mars 2025. Il rejoint la carte magasin plutôt que la carte internet.
+        //
+        // Ses libellés ne l'auraient pas rattrapé : 28 sont vides, et les 6 autres portent
+        // « JPO Lasbordes », un seul client sur deux factures de juillet 2024. Sans cette
+        // entrée, ils tombaient tous en mode inconnu et n'étaient pas repris.
 
         // Correspondance de secours, par le libellé du règlement.
         //

@@ -44,6 +44,9 @@ class MigrationSupplierPrice extends AeroMigrationRunner
     /** @var string Clé de traduction du libellé */
     public $label = 'AeroMigScriptSupplierPrice';
 
+    /** @var string Les tables de l'ancien ERP ne sont pas dans la base de Dolibarr */
+    public $sourceDb = 'aeroprod';
+
     /** @var string Table source */
     protected $srcTable = 'f_artfourniss';
 
@@ -279,8 +282,9 @@ class MigrationSupplierPrice extends AeroMigrationRunner
             // f_comptet compte 157 102 lignes : on la restreint aux seuls tiers cités par
             // f_artfourniss, soit un peu plus de 300.
             'sourceSuppliers' => array(
-                'sql'   => 'SELECT DISTINCT c.CT_Num as k FROM f_comptet as c'
-                    .' INNER JOIN (SELECT DISTINCT CT_Num FROM '.$this->srcTable.') as f ON f.CT_Num = c.CT_Num',
+                'sql'   => 'SELECT DISTINCT c.CT_Num as k FROM '.$this->src('f_comptet').' as c'
+                    .' INNER JOIN (SELECT DISTINCT CT_Num FROM '.$this->src($this->srcTable).') as f'
+                    .' ON f.CT_Num = c.CT_Num',
                 'field' => 'k',
             ),
         );
@@ -315,7 +319,7 @@ class MigrationSupplierPrice extends AeroMigrationRunner
         $prefix = $this->db->escape($this->refExtPrefix);
 
         $sql  = 'SELECT p.rowid, p.ref, p.tva_tx, p.price, f.AR_Ref FROM '.MAIN_DB_PREFIX.'product as p';
-        $sql .= ' INNER JOIN (SELECT DISTINCT AR_Ref FROM '.$this->srcTable.') as f';
+        $sql .= ' INNER JOIN (SELECT DISTINCT AR_Ref FROM '.$this->src($this->srcTable).') as f';
         $sql .= "   ON p.ref_ext = CONCAT('".$prefix."', CONVERT(f.AR_Ref USING utf8mb4))";
         $sql .= ' WHERE p.entity IN ('.getEntity('product').')';
 
@@ -351,7 +355,7 @@ class MigrationSupplierPrice extends AeroMigrationRunner
         $prefix = $this->db->escape($this->refExtPrefix);
 
         $sql  = 'SELECT s.rowid, f.CT_Num FROM '.MAIN_DB_PREFIX.'societe as s';
-        $sql .= ' INNER JOIN (SELECT DISTINCT CT_Num FROM '.$this->srcTable.') as f';
+        $sql .= ' INNER JOIN (SELECT DISTINCT CT_Num FROM '.$this->src($this->srcTable).') as f';
         $sql .= "   ON s.ref_ext = CONCAT('".$prefix."', CONVERT(f.CT_Num USING utf8mb4))";
         $sql .= ' WHERE s.entity IN ('.getEntity('societe').')';
 
@@ -475,7 +479,7 @@ class MigrationSupplierPrice extends AeroMigrationRunner
      */
     protected function loadRefCollisions()
     {
-        $sql = 'SELECT CT_Num, AF_RefFourniss FROM '.$this->srcTable;
+        $sql = 'SELECT CT_Num, AF_RefFourniss FROM '.$this->src($this->srcTable);
         if ($this->srcWhere !== '') {
             $sql .= ' WHERE '.$this->srcWhere;
         }
@@ -517,7 +521,7 @@ class MigrationSupplierPrice extends AeroMigrationRunner
      */
     protected function countDiscardedRows()
     {
-        $sql   = 'SELECT COUNT(*) as nb FROM '.$this->srcTable." WHERE TRIM(COALESCE(CT_Num,'')) = ''";
+        $sql   = 'SELECT COUNT(*) as nb FROM '.$this->src($this->srcTable)." WHERE TRIM(COALESCE(CT_Num,'')) = ''";
         $resql = $this->db->query($sql);
         if (!$resql) {
             $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());

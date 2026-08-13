@@ -36,6 +36,31 @@ if (!$user->admin) {
 
 
 /*
+ * Actions
+ */
+
+$action = GETPOST('action', 'aZ09');
+
+if ($action === 'setsourcedb') {
+    // La valeur vide est légitime : elle dit « la source est dans la base de Dolibarr »,
+    // seul cas possible sur un hébergement qui n'en autorise qu'une. La constante est donc
+    // posée même vide, jamais supprimée — son absence signifierait « jamais réglé », et les
+    // scripts retomberaient sur la base qu'ils déclarent en dur.
+    $sourceDb = trim(GETPOST('AEROMIG_SOURCE_DB', 'alphanohtml'));
+
+    if ($sourceDb !== '' && !preg_match('/^[A-Za-z0-9_]+$/', $sourceDb)) {
+        setEventMessages($langs->trans('AeroMigSourceDbInvalid'), null, 'errors');
+    } else {
+        dolibarr_set_const($db, 'AEROMIG_SOURCE_DB', $sourceDb, 'chaine', 0, '', $conf->entity);
+        setEventMessages($langs->trans('SetupSaved'), null, 'mesgs');
+    }
+
+    header('Location: '.$_SERVER['PHP_SELF']);
+    exit;
+}
+
+
+/*
  * View
  */
 
@@ -50,6 +75,34 @@ print dol_get_fiche_head($head, 'setup', '', -1, 'fa-database');
 
 print '<span class="opacitymedium">'.$langs->trans('AeroMigSetupPageHelp').'</span>';
 print '<br><br>';
+
+// ── Base où lire les tables de l'ancien ERP ────────────────────────────────
+//
+// Le réglage vit ici et non dans le code : la même version du module sert en développement,
+// où l'export est chargé dans une base à part, et en ligne, où l'hébergement n'autorise
+// souvent qu'une seule base — Plesk en donne une par site, avec son propre phpMyAdmin.
+
+$sourceDbSet = isset($conf->global->AEROMIG_SOURCE_DB);
+$sourceDb    = $sourceDbSet ? trim(getDolGlobalString('AEROMIG_SOURCE_DB')) : '';
+
+print '<form method="POST" action="'.$_SERVER['PHP_SELF'].'">';
+print '<input type="hidden" name="token" value="'.newToken().'">';
+print '<input type="hidden" name="action" value="setsourcedb">';
+
+print '<table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="3">'.$langs->trans('AeroMigSourceDbTitle').'</td></tr>';
+print '<tr class="oddeven">';
+print '<td>'.$langs->trans('AeroMigSourceDb').'</td>';
+print '<td><input type="text" name="AEROMIG_SOURCE_DB" value="'.dol_escape_htmltag($sourceDb).'"';
+print ' placeholder="'.dol_escape_htmltag($db->database_name).'" size="30"></td>';
+print '<td class="right"><input type="submit" class="button" value="'.$langs->trans('Save').'"></td>';
+print '</tr>';
+print '<tr class="oddeven"><td colspan="3"><span class="opacitymedium">';
+print $langs->trans('AeroMigSourceDbHelp', $db->database_name);
+print '</span></td></tr>';
+print '</table>';
+print '</form>';
+print '<br>';
 
 $scripts = aeromigrationGetScripts();
 
@@ -69,14 +122,22 @@ if (empty($scripts)) {
         // L'état se mesure sur la base, pas sur une trace d'exécution : un script est
         // « lancé » si ce qu'il produit est là. C'est la seule mesure qui reste juste
         // quel que soit l'environnement, et après une purge.
-        $done = -1;
+        $done        = -1;
+        $sourceIssue = '';
         dol_include_once($script['file']);
         if (class_exists($script['class'])) {
             $runner = new $script['class']($db, $user);
             $done   = $runner->countMigrated();
+            // Une source injoignable ne se voyait qu'à un état « Indéterminé », qui pouvait
+            // aussi bien signifier une dépendance absente. Le dire explicitement évite de
+            // chercher du côté de la cible un défaut qui est du côté de la source.
+            $sourceIssue = $runner->sourceError();
         }
 
-        if ($done > 0) {
+        if ($sourceIssue !== '') {
+            $status = '<span class="badge badge-status8 badge-status" title="'
+                .dol_escape_htmltag($sourceIssue).'">'.$langs->trans('AeroMigStatusNoSource').'</span>';
+        } elseif ($done > 0) {
             // Le volume repris n'est pas affiché : cette colonne répond à une seule
             // question, celle de savoir où l'on en est dans l'ordre des reprises.
             $status = '<span class="badge badge-status4 badge-status">'

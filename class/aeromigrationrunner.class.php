@@ -325,10 +325,118 @@ abstract class AeroMigrationRunner
      * @param DoliDB $db   Handler de base de données
      * @param User   $user Utilisateur au nom duquel les objets sont créés
      */
+    /**
+     * Sentinelle : distingue « constante absente » de « constante posée à vide ».
+     *
+     * Une chaîne vide est une valeur SIGNIFIANTE — elle veut dire « la source est dans la
+     * base de Dolibarr ». Sans sentinelle, impossible de la différencier d'un réglage jamais
+     * fait, et l'hébergement mono-base deviendrait inatteignable.
+     */
+    const SOURCE_DB_UNSET = "\0unset";
+
+    /**
+     * Constructeur.
+     *
+     * @param DoliDB $db   Handler de base de données
+     * @param User   $user Utilisateur au nom duquel les objets sont créés
+     */
     public function __construct($db, $user)
     {
         $this->db   = $db;
         $this->user = $user;
+
+        $this->resolveSourceDb();
+    }
+
+    /**
+     * Arrête la base où lire la source, sans qu'il faille toucher au code.
+     *
+     * ------------------------------------------------------------------------------
+     * TROIS ENVIRONNEMENTS, UNE SEULE RÈGLE
+     * ------------------------------------------------------------------------------
+     *
+     * Les scripts déclarent `aeroprod`, la base à part où l'export de l'éditeur a été chargé
+     * en développement. Cette valeur est fausse ailleurs, et le rester silencieusement est
+     * précisément ce qui a rendu huit scripts inopérants sans que rien ne le dise.
+     *
+     * Trois cas, dans cet ordre de priorité :
+     *
+     * 1. `--source-db=NOM` en ligne de commande — surcharge ponctuelle, appliquée par
+     *    migrate.php après l'instanciation ;
+     * 2. la constante **`AEROMIG_SOURCE_DB`**, réglable depuis la page de configuration —
+     *    c'est elle qui vaut pour l'exploitation courante ;
+     * 3. à défaut, la valeur déclarée par le script.
+     *
+     * **Sur un hébergement qui n'autorise qu'une base — Plesk, où chaque base a son propre
+     * phpMyAdmin —, les tables de l'ancien ERP cohabitent avec les `llx_*`.** Aucune ne porte
+     * ce préfixe, la cohabitation est donc sans risque, mais elles ne doivent alors plus être
+     * qualifiées. Deux façons de le dire : poser la constante à vide, ou lui donner le nom de
+     * la base de Dolibarr — les deux reviennent au même, et la seconde est la plus lisible
+     * pour qui relit la configuration six mois plus tard.
+     *
+     * @return void
+     */
+    protected function resolveSourceDb()
+    {
+        $configured = getDolGlobalString('AEROMIG_SOURCE_DB', self::SOURCE_DB_UNSET);
+        if ($configured !== self::SOURCE_DB_UNSET) {
+            $this->sourceDb = trim($configured);
+        }
+
+        // Qualifier une table de la base courante ne sert à rien et casse dès que la base est
+        // renommée : on ramène ce cas au comportement « pas de préfixe ».
+        if ($this->sourceDb !== '' && $this->sourceDb === $this->db->database_name) {
+            $this->sourceDb = '';
+        }
+    }
+
+    /**
+     * Vérifie que la table source est réellement atteignable.
+     *
+     * Sans ce contrôle, une base source mal réglée ne produit qu'un comptage négatif et un
+     * parcours vide : le script annonce « 0 enregistrement » et s'arrête, ce qui se confond
+     * avec une reprise déjà faite. Le diagnostic doit être explicite, et dire quoi corriger.
+     *
+     * @return string Message d'anomalie, chaîne vide si la source répond
+     */
+    public function sourceError()
+    {
+        if ($this->srcTable === '') {
+            return '';
+        }
+
+        $resql = $this->db->query('SELECT 1 FROM '.$this->src($this->srcTable).' LIMIT 1', 1);
+        if ($resql) {
+            $this->db->free($resql);
+            return '';
+        }
+
+        $current = $this->db->database_name;
+        $errno   = (int) $this->db->lasterrno();
+
+        // 1044 et 1142 : la base ou la table existe, mais l'utilisateur n'a pas le droit de la
+        // lire. C'est le cas courant d'un hébergement où chaque base a son propre compte —
+        // Plesk en tête. Le module n'ouvre qu'une connexion, celle de Dolibarr : il n'y a pas
+        // d'identifiants à renseigner, c'est ce compte-là qui doit voir les deux bases.
+        if ($errno === 1044 || $errno === 1142) {
+            return 'Accès refusé à la base « '.($this->sourceDb !== '' ? $this->sourceDb : $current).' ».'
+                .' Le module lit la source par la connexion de Dolibarr : accordez à son'
+                .' utilisateur MySQL le droit SELECT sur cette base — sous Plesk, en l\'ajoutant'
+                .' comme utilisateur de la base dans « Bases de données ». Il n\'y a pas de second'
+                .' identifiant à renseigner.';
+        }
+
+        if ($this->sourceDb !== '') {
+            return 'Source introuvable dans la base « '.$this->sourceDb.' ».'
+                .' Si les tables de l\'ancien ERP cohabitent avec celles de Dolibarr, posez la'
+                .' constante AEROMIG_SOURCE_DB sur « '.$current.' » depuis la configuration du'
+                .' module, ou lancez avec « --source-db= ».';
+        }
+
+        return 'Source introuvable dans la base « '.$current.' », celle de Dolibarr.'
+            .' Si les tables de l\'ancien ERP sont dans une base séparée, renseignez la'
+            .' constante AEROMIG_SOURCE_DB depuis la configuration du module, ou lancez avec'
+            .' « --source-db=NOM ».';
     }
 
     /**
@@ -627,6 +735,14 @@ abstract class AeroMigrationRunner
     {
         $this->stats  = array('read' => 0, 'created' => 0, 'adopted' => 0, 'updated' => 0, 'skipped' => 0, 'error' => 0);
         $this->errors = array();
+
+        // Avant tout le reste : une source injoignable ne doit pas se traduire par un
+        // parcours vide, qui se confondrait avec une reprise déjà faite.
+        $sourceError = $this->sourceError();
+        if ($sourceError !== '') {
+            $this->errors[] = array('key' => '', 'message' => $sourceError);
+            return -1;
+        }
 
         if ($this->prepare() <= 0) {
             return -1;

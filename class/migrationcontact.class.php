@@ -34,13 +34,19 @@ class MigrationContact extends AeroMigrationRunner
     /** @var string Clé de traduction du libellé */
     public $label = 'AeroMigScriptContact';
 
+    /** @var string Les tables de l'ancien ERP ne sont pas dans la base de Dolibarr */
+    public $sourceDb = 'aeroprod';
+
     /**
      * Source jointe au tiers : la civilité et la désinscription newsletter ne figurent
      * que côté `f_comptet`.
      *
+     * Seule la table principale est nommée ici. La jointure est bâtie par src(), qui doit
+     * qualifier les DEUX tables de la base source — voir la surcharge plus bas.
+     *
      * @var string
      */
-    protected $srcTable = 'f_contactt as k LEFT JOIN f_comptet as c ON c.CT_Num = k.CT_Num';
+    protected $srcTable = 'f_contactt';
 
     /** @var string Colonnes lues, dont deux empruntées au tiers */
     protected $srcFields = 'k.*, c.CT_Qualite as tiers_qualite, c.Unsubscribe_Newsletter as tiers_unsubscribe';
@@ -106,6 +112,32 @@ class MigrationContact extends AeroMigrationRunner
         'mademoiselle'    => 'MLE',
         'monsieur madame' => 'MR',
     );
+
+    /**
+     * Qualifie la source, en bâtissant la jointure au passage.
+     *
+     * Ce script est le seul dont la source n'est pas une table mais une jointure, et le
+     * mécanisme du socle ne peut pas le deviner : `src()` préfixerait la chaîne entière et
+     * ne qualifierait donc que la PREMIÈRE table. `f_comptet` serait cherchée dans la base
+     * de Dolibarr, où elle n'est pas.
+     *
+     * La jointure est bâtie ici plutôt que dans le constructeur : `--source-db` est appliquée
+     * après l'instanciation (migrate.php:240), une composition faite trop tôt garderait
+     * l'ancienne base.
+     *
+     * @param  string $table Nom de la table source
+     * @return string        Expression qualifiée, prête à entrer dans un FROM
+     */
+    protected function src($table)
+    {
+        $qualified = parent::src($table);
+
+        if ($table !== $this->srcTable) {
+            return $qualified;
+        }
+
+        return $qualified.' as k LEFT JOIN '.parent::src('f_comptet').' as c ON c.CT_Num = k.CT_Num';
+    }
 
     /**
      * Charge l'index des tiers déjà migrés, pour rattacher chaque contact à sa société.

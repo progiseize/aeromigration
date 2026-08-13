@@ -98,7 +98,7 @@ function aeromigrationGetScripts()
             'file'  => '/aeromigration/class/migrationsupplierprice.class.php',
         ),
         // Indépendant des autres reprises, mais à passer avant les stocks : ceux-ci s'y
-        // rattachent. Lit f_emplacements, seule table du jeu qui ne vienne pas de Sage.
+        // rattachent. Lit f_depotempl, la table des emplacements de rangement.
         array(
             'code'  => 'warehouse',
             'label' => 'AeroMigScriptWarehouse',
@@ -155,6 +155,15 @@ function aeromigrationGetScripts()
             'label' => 'AeroMigScriptInvoice',
             'class' => 'MigrationInvoice',
             'file'  => '/aeromigration/class/migrationinvoice.class.php',
+        ),
+        // Dépend des tiers, des articles, des entrepôts ET des commandes fournisseur : les
+        // lignes s'adossent aux lignes de commande. Ne mouvemente pas le stock, et refuse de
+        // démarrer si la configuration l'y conduirait.
+        array(
+            'code'  => 'reception',
+            'label' => 'AeroMigScriptReception',
+            'class' => 'MigrationReception',
+            'file'  => '/aeromigration/class/migrationreception.class.php',
         ),
         // Dépend des tiers. Ne crée rien : réaligne la catégorie tarifaire des fiches
         // existantes sur aeromigration_price_level(). À passer avec « customerprice », les

@@ -34,6 +34,9 @@ class MigrationCategory extends AeroMigrationRunner
     /** @var string Clé de traduction du libellé */
     public $label = 'AeroMigScriptCategory';
 
+    /** @var string Les tables de l'ancien ERP ne sont pas dans la base de Dolibarr */
+    public $sourceDb = 'aeroprod';
+
     /** @var string Table source */
     protected $srcTable = 'f_catalogue';
 
@@ -115,7 +118,7 @@ class MigrationCategory extends AeroMigrationRunner
     {
         // Le catalogue entier est chargé en mémoire : 504 lignes, et la résolution des
         // parents exige de pouvoir remonter la hiérarchie sans requête supplémentaire.
-        $sql   = 'SELECT CL_No, CL_Intitule, CL_NoParent, CL_Niveau, id_externe FROM '.$this->srcTable;
+        $sql   = 'SELECT CL_No, CL_Intitule, CL_NoParent, CL_Niveau, id_externe FROM '.$this->src($this->srcTable);
         $resql = $this->db->query($sql);
         if (!$resql) {
             $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
@@ -285,9 +288,9 @@ class MigrationCategory extends AeroMigrationRunner
     {
         $collated = 'CONVERT(%s.CL_Intitule USING utf8mb4) COLLATE utf8mb4_0900_ai_ci';
 
-        $sql  = 'SELECT c.CL_No FROM '.$this->srcTable.' as c';
-        $sql .= ' INNER JOIN (SELECT CL_NoParent, '.sprintf($collated, $this->srcTable).' as lib, MIN(CL_No) as premier';
-        $sql .= '   FROM '.$this->srcTable.' GROUP BY CL_NoParent, lib HAVING COUNT(*) > 1) as d';
+        $sql  = 'SELECT c.CL_No FROM '.$this->src($this->srcTable).' as c';
+        $sql .= ' INNER JOIN (SELECT CL_NoParent, '.sprintf($collated, 't').' as lib, MIN(CL_No) as premier';
+        $sql .= '   FROM '.$this->src($this->srcTable).' as t GROUP BY CL_NoParent, lib HAVING COUNT(*) > 1) as d';
         $sql .= '   ON d.CL_NoParent = c.CL_NoParent AND d.lib = '.sprintf($collated, 'c');
         $sql .= ' WHERE c.CL_No <> d.premier';
 

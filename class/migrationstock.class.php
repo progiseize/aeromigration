@@ -1394,7 +1394,8 @@ class MigrationStock extends AeroMigrationRunner
     protected function purgeThresholds(array &$result)
     {
         $sql  = 'SELECT p.rowid FROM '.MAIN_DB_PREFIX.'product as p';
-        $sql .= ' INNER JOIN f_artstock as s ON CONCAT(\''.$this->db->escape($this->refExtPrefix).'\','
+        $sql .= ' INNER JOIN '.$this->src('f_artstock').' as s'
+            .' ON CONCAT(\''.$this->db->escape($this->refExtPrefix).'\','
             .' CONVERT(s.AR_Ref USING utf8mb4)) = p.ref_ext';
         $sql .= ' WHERE s.DE_No = '.((int) $this->mainDepotNo);
         $sql .= ' AND (s.AS_QteMini <> 0 OR s.AS_QteMaxi <> 0)';
