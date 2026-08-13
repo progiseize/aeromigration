@@ -42,15 +42,26 @@ if (!$user->admin) {
 $action = GETPOST('action', 'aZ09');
 
 if ($action === 'setsourcedb') {
-    // La valeur vide est légitime : elle dit « la source est dans la base de Dolibarr »,
-    // seul cas possible sur un hébergement qui n'en autorise qu'une. La constante est donc
-    // posée même vide, jamais supprimée — son absence signifierait « jamais réglé », et les
-    // scripts retomberaient sur la base qu'ils déclarent en dur.
     $sourceDb = trim(GETPOST('AEROMIG_SOURCE_DB', 'alphanohtml'));
 
     if ($sourceDb !== '' && !preg_match('/^[A-Za-z0-9_]+$/', $sourceDb)) {
         setEventMessages($langs->trans('AeroMigSourceDbInvalid'), null, 'errors');
     } else {
+        // ── Le champ vide ne peut PAS être stocké tel quel ──────────────────
+        //
+        // `dolibarr_set_const()` supprime la constante au lieu de l'enregistrer quand la
+        // valeur est vide : `if (strcmp($value, ''))` encadre le seul INSERT
+        // (admin.lib.php:722). Une constante « posée à vide » est donc impossible à obtenir
+        // par cette voie — et son absence signifie « jamais réglé », auquel cas chaque script
+        // retombe sur la base qu'il déclare en dur.
+        //
+        // Le champ vide est donc enregistré comme le NOM de la base de Dolibarr, que
+        // `resolveSourceDb()` ramène de toute façon à « pas de préfixe ». Le réglage survit,
+        // et il se relit mieux six mois plus tard qu'une ligne vide.
+        if ($sourceDb === '') {
+            $sourceDb = $db->database_name;
+        }
+
         dolibarr_set_const($db, 'AEROMIG_SOURCE_DB', $sourceDb, 'chaine', 0, '', $conf->entity);
         setEventMessages($langs->trans('SetupSaved'), null, 'mesgs');
     }

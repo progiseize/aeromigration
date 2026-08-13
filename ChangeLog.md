@@ -6,6 +6,89 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.12.1] — 2026-08-12
+
+Correctifs de mise en ligne. Aucune fonctionnalité nouvelle, mais **un défaut de calcul qu'il
+ne fallait pas laisser passer en production**.
+
+### La remise « de type 1 » est un pourcentage, pas un montant
+
+`DL_Remise01REM_Type = 1` était tenu pour une remise exprimée en montant, et **abandonnée** :
+Dolibarr n'accepte qu'un taux à la ligne, et convertir un montant aurait faussé le prix
+unitaire. L'hypothèse venait de `MigrationSupplierOrder`, où elle ne portait que sur seize
+lignes et ne se voyait pas.
+
+Elle est fausse, et la source le démontre elle-même. Sur les **7 925 lignes de facture de
+type 1** où le calcul est vérifiable, en confrontant `DL_MontantHT` aux deux formules :
+
+```
+interprétée en POURCENTAGE ... 7 851 lignes conformes
+interprétée en MONTANT .......     6 lignes conformes
+```
+
+La facture `F010000781` suffit à trancher : prix 790,00, remise 5,063291 de type 1, et
+`DL_MontantHT` vaut **750,00** — soit exactement 790 × (1 − 5,063291 / 100).
+
+**7 927 lignes de facture perdaient ainsi leur remise**, la facture étant écrite au prix plein.
+Mesuré sur les 24 993 factures du premier lot : **3 898 documents en écart de plus d'un euro**,
+jusqu'à **790 €** sur une seule facture.
+
+Les 74 lignes qui ne collent à aucune des deux formules portent des remises de 5 % et 50 % —
+des pourcentages ordinaires dont `DL_MontantHT` n'a pas été recalculé après coup.
+
+**Vérifié après correction**, sur 400 factures rejouées avec les mêmes données :
+
+| | avant | après |
+|---|---:|---:|
+| écart supérieur à 1 € | 3 898 | **0** |
+| écart maximal | 790,00 € | **0,05 €** |
+
+Les écarts résiduels sont sous le centime et demi : la source stocke ses prix à six décimales,
+Dolibarr arrondit à la ligne.
+
+⚠️ **`MigrationCustomerOrder` et `MigrationSupplierOrder` portent le même défaut** et ne sont
+pas encore corrigés. Leurs remises de type 1 sont perdues de la même façon — 61 693 commandes
+clients et 2 567 commandes fournisseur sont concernées. À rejouer.
+
+### L'indice de règlement 10 était ignoré
+
+« CB Portable / extérieur » figure au dictionnaire de la source mais manquait à la table de
+correspondance : **34 règlements, 6 908,84 €**, entre mars 2024 et mars 2025. Leurs libellés ne
+les rattrapaient pas — 28 sont vides — et ils tombaient en mode inconnu, sans être repris. Ils
+rejoignent la carte magasin : un terminal portable encaisse en présentiel.
+
+### La page de configuration ne peut plus bloquer
+
+Elle mesurait l'avancement des seize scripts **à chaque affichage**. Tant que source et cible
+partagent un serveur, cela se compte en secondes ; dès qu'elles sont séparées — deux bases,
+deux collations —, en minutes. La page devenait inutilisable, et le réglage qu'on venait y
+chercher inaccessible : précisément celui qui aurait corrigé la situation.
+
+Le calcul se demande désormais, par un bouton. La page s'affiche instantanément.
+
+`MigrationPriceLevel::countMigrated()` en était la principale cause : il appariait chaque tiers
+à sa ligne source par `CONCAT('SAGE:', CT_Num) = ref_ext`, expression que MySQL ne sait pas
+indexer — hash join de 157 582 lignes contre 155 898. Il procède maintenant par deux agrégats
+indépendants rapprochés en mémoire. La mesure devient approchée — deux tiers mal aiguillés en
+sens inverse se compenseraient, l'écart constaté est d'une unité sur 157 188 — mais son coût ne
+dépend plus du produit des deux tables.
+
+### Corrigé
+
+- **Le champ « Base source » laissé vide ne s'enregistrait pas.** `dolibarr_set_const()` ne
+  stocke pas les valeurs vides — `if (strcmp($value, ''))` encadre son unique `INSERT`
+  (admin.lib.php:722) —, si bien que le réglage disparaissait au lieu d'être posé, et que les
+  scripts retombaient sur la base qu'ils déclarent en dur. Le champ vide enregistre désormais le
+  nom de la base de Dolibarr, que le socle ramène de toute façon à « pas de préfixe ».
+- **Le contrôle de source faisait seize requêtes** pour poser seize fois la même question. Il
+  n'en fait plus qu'une, mise en cache et partagée entre les scripts.
+- **Une source refusée se distingue d'une source absente** : les erreurs MySQL 1044 et 1142
+  produisent un message qui parle de droits — le module lit la source par la connexion de
+  Dolibarr, il n'y a pas de second identifiant à renseigner.
+- Le registre des scripts annonçait que `location` lisait `f_emplacements` ; c'est
+  `f_depotempl` depuis la 0.11.0.
+
+
 ## [0.12.0] — 2026-08-12
 
 Trois chantiers, restés jusqu'ici hors publication : la reprise des **factures clients et de

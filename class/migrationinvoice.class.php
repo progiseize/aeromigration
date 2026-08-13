@@ -648,11 +648,11 @@ class MigrationInvoice extends AeroMigrationRunner
         foreach ($this->linesByDocument[$piece] as $line) {
             $amount = (float) $line->DL_Qte * (float) $line->DL_PrixUnitaire;
 
-            // Seules les remises en pourcentage sont reportées en cible : celles exprimées en
-            // montant sont abandonnées, et ne doivent donc pas peser sur le classement non plus.
+            // La remise est TOUJOURS un pourcentage, quel que soit DL_Remise01REM_Type — voir
+            // mapLine() pour la démonstration. Dans les deux sens : la source majore par une
+            // remise négative.
             $discount = (float) $line->DL_Remise01REM_Valeur;
-            if ($discount != 0 && (int) $line->DL_Remise01REM_Type !== 1) {
-                // Dans les deux sens : la source majore par une remise négative.
+            if ($discount != 0) {
                 $amount *= (1 - $discount / 100);
             }
             $total += $amount;
@@ -930,11 +930,30 @@ class MigrationInvoice extends AeroMigrationRunner
         $price    = (float) $line->DL_PrixUnitaire;
         $discount = (float) $line->DL_Remise01REM_Valeur;
 
-        if ($discount != 0 && (int) $line->DL_Remise01REM_Type === 1) {
-            // Remise exprimée en montant : Dolibarr n'attend ici qu'un pourcentage, et convertir
-            // fausserait le prix unitaire. La remise est abandonnée, le prix source restant juste.
-            $discount = 0;
-        }
+        // ------------------------------------------------------------------------------
+        // DL_Remise01REM_Type NE DISTINGUE PAS POURCENTAGE ET MONTANT
+        // ------------------------------------------------------------------------------
+        //
+        // La première version de ce script tenait le type 1 pour une remise en montant et
+        // l'abandonnait — hypothèse héritée de `MigrationSupplierOrder`, où elle ne portait
+        // que sur seize lignes. Elle est fausse, et sur les factures elle coûtait cher :
+        // 7 927 lignes perdaient leur remise, la facture étant écrite au prix plein.
+        //
+        // La source tranche d'elle-même, en confrontant `DL_MontantHT` aux deux formules
+        // possibles sur les 7 925 lignes de type 1 où le calcul est vérifiable :
+        //
+        //     interprétée en POURCENTAGE ... 7 851 lignes conformes
+        //     interprétée en MONTANT ....... 6 lignes conformes
+        //
+        // La facture F010000781 est exemplaire : prix 790,00, remise 5,063291 de type 1, et
+        // `DL_MontantHT` vaut 750,00 — soit exactement 790 × (1 − 5,063291 / 100).
+        //
+        // Les 74 lignes qui ne collent à aucune des deux formules portent des remises de 5 %
+        // et 50 % : des pourcentages ordinaires dont `DL_MontantHT` n'a pas été recalculé
+        // après coup. Rien qui contredise la lecture.
+        //
+        // La remise est donc reportée telle quelle, quel que soit son type. Le cas négatif,
+        // traité juste en dessous, reste le seul à demander un traitement particulier.
 
         if ($discount < 0) {
             // Remise négative : la source s'en sert pour MAJORER une ligne — 169 lignes, jusqu'à
