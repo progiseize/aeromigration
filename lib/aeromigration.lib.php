@@ -182,6 +182,14 @@ function aeromigrationGetScripts()
             'class' => 'MigrationCustomerPrice',
             'file'  => '/aeromigration/class/migrationcustomerprice.class.php',
         ),
+        // Dépend des articles, des deux côtés : un lot et ses composants doivent tous être
+        // repris avant d'être liés. Ne touche ni aux prix ni au stock — seulement au lien.
+        array(
+            'code'  => 'productkit',
+            'label' => 'AeroMigScriptProductKit',
+            'class' => 'MigrationProductKit',
+            'file'  => '/aeromigration/class/migrationproductkit.class.php',
+        ),
     );
 }
 

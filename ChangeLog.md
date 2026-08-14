@@ -6,6 +6,85 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.13.0] — 2026-08-14
+
+### Les articles composés sont liés
+
+Nouveau script `productkit` : `f_nomenclat` → `llx_product_association`. Les 184 articles
+composés de l'ancien ERP sont des **lots commerciaux** — « Lot des 4 cartes IGN-OACI »,
+« Pochette VFR complète » —, pas des fabrications. Rien n'est transformé : on vend ensemble des
+articles qui existent séparément au catalogue et se vendent aussi à l'unité, dix-sept fois plus
+que les lots. C'est la définition du **kit** de Dolibarr, et non celle d'une nomenclature.
+
+L'option `PRODUIT_SOUSPRODUITS` était déjà active, et les deux extrémités toutes reprises :
+184 composés et 251 composants retrouvés par leur `ref_ext`. Le module BOM n'est pas requis.
+
+**Sur 508 lignes de composition, 19 sont écartées :**
+
+```
+ 3  l'article se contient lui-même
+ 6  ligne de composition en sommeil
+12  article 14749, mis de côté
+```
+
+Les **auto-références** ne sont pas une précaution théorique. `3887` ne contient que lui-même,
+deux fois ; `6571` se contient une fois en plus de son vrai composant. Une composition récursive
+fait boucler tout système qui la déroule, et **le cœur ne s'en protège pas** : le contrôle
+anti-boucle d'`add_sousproduit()` exécute bien sa requête mais **n'en lit jamais le résultat**
+(product.class.php:4984). Aucun cycle n'est refusé — c'est à l'appelant de le faire.
+
+Les **lignes en sommeil** sont écartées sur décision du client. Elles règlent au passage un faux
+problème : `4111` portait ses deux composants en double, une version en sommeil et une active.
+
+L'**article 14749** est mis de côté sur décision du client : son composant `9592` y figure dix
+fois en quantité 1, soit dix tailles d'un vêtement gérées comme des articles distincts. La source
+sait pourtant exprimer une quantité — elle va jusqu'à 100 ailleurs —, ce qui confirme que dix
+lignes à 1 ne valent pas « dix exemplaires ». Le cas se traitera à part.
+
+Reste **489 liaisons sur 181 articles**, sans un seul couple en double.
+
+### Le stock des composants suit celui du lot
+
+`incdec = 1`, le défaut de Dolibarr : vendre le lot décrémente chaque composant. Le lot n'a pas
+de stock propre, il n'existe qu'à la vente. Le choix est réversible — `add_sousproduit()`
+commençant par supprimer le lien, un rejeu avec l'autre valeur le remplace.
+
+### Vérifications
+
+```
+181  articles composés, 489 liaisons        (0,1 s)
+  0  liaison sans correspondance dans la source
+  0  auto-référence, 0 boucle père ↔ fils
+  3  liaisons préexistantes reconnues, pas redoublées
+```
+
+Trois associations avaient été saisies à la main sur `#03881` avant toute reprise ; elles sont
+conformes à la source et le script les a laissées telles quelles.
+
+**Second passage : 0 écriture, 181 ignorés.** L'idempotence porte sur le lien lui-même,
+`llx_product_association` n'ayant ni `ref_ext` ni `import_key`.
+
+`6571` ressort avec son seul vrai composant, l'auto-référence retirée.
+
+### Conséquence à connaître sur le lot le plus vendu
+
+Écarter les lignes en sommeil retire à **`3444`** — le lot le plus vendu du catalogue — l'un de
+ses trois composants (`3441`, Rapp'Aéro rigide). Il n'en garde que deux. La ligne est bien en
+sommeil dans la source, donc le script est fidèle à ce qu'on lui a demandé, mais la composition
+publiée sera incomplète tant que le client n'aura pas tranché.
+
+`6849` perd de même son unique composant et n'est donc plus un kit — sans conséquence, son
+libellé commençant par « NE PAS UTILISER » pour deux ventes en tout.
+
+Les quatre autres lignes en sommeil sont sans effet : deux auto-références et deux doublons de
+lignes actives.
+
+`PRODUITS_COMPOSES.md` porte cette alerte en tête et passe au bilan de ce qui a été repris. Deux
+constats de sa première version y sont corrigés, que la reprise a démentis : `3887` ne contient
+pas « deux sous-composants » mais uniquement lui-même, et il n'y a **qu'un** cas de composition
+à deux niveaux — le second n'était qu'un effet de cette auto-référence.
+
+
 ## [0.12.8] — 2026-08-14
 
 ### Les tarifs repris sont pilotés par le niveau 1

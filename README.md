@@ -39,9 +39,10 @@ php migrate.php invoice        factures et règlements → rattachés à leur co
 php migrate.php reception      réceptions fournisseur → adossées aux lignes de commande
 php migrate.php pricelevel     catégorie tarifaire des clients   ⚠ Prestasync coupé
 php migrate.php customerprice  tarifs de vente, les huit niveaux ⚠ Prestasync coupé
+php migrate.php productkit     articles composés → liaisons de kit
 ```
 
-Les deux derniers **se passent ensemble, Prestasync suspendu** : `pricelevel` range les clients
+`pricelevel` et `customerprice` **se passent ensemble, Prestasync suspendu** : `pricelevel` range les clients
 par catégorie, `customerprice` remplit les grilles. Entre les deux, les uns et les autres ne se
 correspondent pas — et un client dont le niveau n'a pas encore de prix se voit facturer zéro.
 
