@@ -62,13 +62,44 @@
  * passage n'écrit rien et n'ajoute aucune ligne d'historique. `loadMigratedIndex()` est
  * surchargée pour renvoyer un index vide, faute de quoi le socle sauterait toutes les lignes.
  *
+ * ## Les niveaux 2 à 8 sont pilotés par le niveau 1
+ *
+ * Un prix figé se démode : au premier changement du tarif de base, les sept autres niveaux
+ * restent en arrière et la politique commerciale se perd — c'est exactement ce qui se passait
+ * dans l'ancien ERP, où la remise était réappliquée à la main article par article.
+ *
+ * Le script pose donc, en même temps que chaque prix, la règle de pilotage d'aerotoolbox :
+ * le drapeau `aerotb_price_follow` et l'écart au niveau 1 dans `aerotb_price_pct`. Le prix
+ * écrit ne change pas d'un centime ; il devient seulement **dérivable**.
+ *
+ * **Le taux est dérivé des deux prix, jamais recopié depuis la source.** Quand la source porte
+ * une remise de famille à 5 %, le prix qui en découle a été arrondi au centime, et l'écart réel
+ * vaut 5,01 % ou 4,98 %. C'est ce chiffre-là qu'il faut garder : stocker 5 % rond ferait sauter
+ * l'arrondi d'étiquette au premier changement du tarif de base. La bibliothèque d'aerotoolbox
+ * fixe la même doctrine — le prix fait foi, le taux mémorise l'écart.
+ *
+ * **Rien n'est écrit dans les deux colonnes par ce script.** La règle est passée au trigger par
+ * `$product->context['aerotb_price_rule']`, et c'est lui qui l'inscrit sur la ligne de prix
+ * qu'il vient de voir naître. Quand seul le pilotage manque — le prix étant déjà juste —,
+ * `aerotbPriceRuleWrite()` le pose directement, sans créer de ligne d'historique pour rien.
+ *
+ * C'est ce dernier point qui permet de **reprendre une grille déjà en place sans la purger** :
+ * un passage sur un catalogue déjà tarifé ne touche aucun prix et se contente de brancher le
+ * pilotage.
+ *
  * @see aeromigration_price_level() pour la correspondance des catégories, et la raison
  *      pour laquelle les deux premières sont permutées.
+ * @see custom/aerotoolbox/lib/aeroprice.lib.php pour le mécanisme de pilotage lui-même.
  */
 
 dol_include_once('/aeromigration/class/aeromigrationrunner.class.php');
 dol_include_once('/aeromigration/lib/aeromigration.lib.php');
 require_once DOL_DOCUMENT_ROOT.'/product/class/product.class.php';
+
+// Le pilotage des niveaux par le niveau 1 appartient à aerotoolbox : les deux colonnes sont
+// à lui, et c'est sa bibliothèque qui les écrit. L'inclusion est sans effet si le module est
+// absent — le script se rabat alors sur des prix figés et le dit au rapport.
+dol_include_once('/aerotoolbox/lib/aeroprice.lib.php');
 
 class MigrationCustomerPrice extends AeroMigrationRunner
 {
@@ -84,6 +115,14 @@ class MigrationCustomerPrice extends AeroMigrationRunner
 
     /** Nombre de niveaux de prix gérés. */
     const LEVELS = 8;
+
+    /**
+     * Écart en deçà duquel deux taux de remise sont tenus pour identiques.
+     *
+     * Le taux est stocké non arrondi, sur huit décimales : la comparaison ne peut pas être
+     * stricte, deux calculs flottants du même écart ne rendant pas toujours le même bit.
+     */
+    const RULE_TOLERANCE = 0.000001;
 
     /** @var string Identifiant du script en ligne de commande */
     public $code = 'customerprice';
@@ -163,6 +202,24 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     /** @var int Nombre total de niveaux écrits */
     protected $writtenLevels = 0;
 
+    /** @var bool Le pilotage par le niveau 1 est-il disponible ? */
+    protected $priceRuleSupported = false;
+
+    /** @var int Règles de pilotage posées en même temps qu'un prix */
+    protected $rulesWithPrice = 0;
+
+    /** @var int Règles posées seules, le prix étant déjà juste */
+    protected $rulesAlone = 0;
+
+    /** @var int Niveaux pilotés dont l'écart au niveau 1 est nul */
+    protected $rulesFlat = 0;
+
+    /** @var int Niveaux pilotés qui majorent le niveau 1 */
+    protected $rulesMarkup = 0;
+
+    /** @var int Niveaux pilotés sans taux calculable, le niveau 1 étant à zéro */
+    protected $rulesWithoutBase = 0;
+
     /**
      * Constructeur.
      *
@@ -188,6 +245,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     {
         foreach (array(
             'checkConfiguration',
+            'checkPriceRuleSupport',
             'loadProductIndex',
             'loadTariffLines',
             'loadFamilyRules',
@@ -230,6 +288,39 @@ class MigrationCustomerPrice extends AeroMigrationRunner
             );
             return -1;
         }
+
+        return 1;
+    }
+
+    /**
+     * Le pilotage des niveaux par le niveau 1 est-il disponible ?
+     *
+     * Il tient à deux choses, et l'absence de l'une des deux n'est pas une erreur : les tarifs
+     * se reprennent très bien sans pilotage, ils sont seulement figés. Le rapport le dit, et le
+     * script continue.
+     *
+     * @return int Toujours 1 : l'absence du mécanisme n'interrompt rien
+     */
+    protected function checkPriceRuleSupport()
+    {
+        $this->priceRuleSupported = false;
+
+        if (!function_exists('aerotbPriceRuleWrite') || !function_exists('aerotbPricePctFromAmount')) {
+            return 1;
+        }
+
+        // La bibliothèque peut être présente sans que la migration de ses colonnes soit passée.
+        $resql = $this->db->query(
+            'SELECT '.AEROTB_PRICE_COL_PCT.', '.AEROTB_PRICE_COL_FOLLOW
+            .' FROM '.MAIN_DB_PREFIX.'product_price LIMIT 1',
+            1
+        );
+        if (!$resql) {
+            return 1;
+        }
+        $this->db->free($resql);
+
+        $this->priceRuleSupported = true;
 
         return 1;
     }
@@ -441,7 +532,10 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     {
         $this->existingPrices = array();
 
-        $sql  = 'SELECT fk_product, price_level, price, price_ttc, price_base_type';
+        $sql  = 'SELECT rowid, fk_product, price_level, price, price_ttc, price_base_type';
+        if ($this->priceRuleSupported) {
+            $sql .= ', '.AEROTB_PRICE_COL_PCT.' as pct, '.AEROTB_PRICE_COL_FOLLOW.' as follow';
+        }
         $sql .= ' FROM '.MAIN_DB_PREFIX.'product_price';
         $sql .= ' WHERE entity IN ('.getEntity($this->dstElement).')';
         $sql .= ' ORDER BY fk_product ASC, price_level ASC, date_price ASC, rowid ASC';
@@ -454,9 +548,12 @@ class MigrationCustomerPrice extends AeroMigrationRunner
 
         while ($obj = $this->db->fetch_object($resql)) {
             $this->existingPrices[(int) $obj->fk_product][(int) $obj->price_level] = array(
+                'rowid'     => (int) $obj->rowid,
                 'price'     => (float) $obj->price,
                 'price_ttc' => (float) $obj->price_ttc,
                 'base'      => (string) $obj->price_base_type,
+                'pct'       => (isset($obj->pct) && $obj->pct !== null) ? (float) $obj->pct : null,
+                'follow'    => !empty($obj->follow),
             );
         }
         $this->db->free($resql);
@@ -664,6 +761,102 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     }
 
     /**
+     * Ramène le montant d'un niveau dans la base voulue.
+     *
+     * Le taux de remise est le même en HT et en TTC, la TVA étant commune aux niveaux d'un
+     * même article — mais encore faut-il comparer deux montants de même base. La source ne
+     * s'en soucie pas : la catégorie Revendeur est déclarée hors taxes alors que 742 de ses
+     * 1 068 lignes sont saisies TTC.
+     *
+     * @param array{price:float,base:string} $level    Niveau à convertir
+     * @param string                         $wantBase Base voulue, « HT » ou « TTC »
+     * @param float                          $vat      Taux de TVA du produit
+     * @return float
+     */
+    protected function amountAs(array $level, $wantBase, $vat)
+    {
+        if ($level['base'] === $wantBase) {
+            return (float) $level['price'];
+        }
+
+        $rate = 1 + ((float) $vat / 100);
+        if ($rate <= 0) {
+            return (float) $level['price'];
+        }
+
+        return ($wantBase === 'TTC')
+            ? (float) $level['price'] * $rate
+            : (float) $level['price'] / $rate;
+    }
+
+    /**
+     * Détermine la règle de pilotage de chacun des huit niveaux.
+     *
+     * Le niveau 1 est la référence et ne se suit pas lui-même. Les sept autres la suivent tous,
+     * y compris ceux dont le prix lui est identique : un niveau aligné sur le tarif de base doit
+     * le rester quand celui-ci bouge, et c'est précisément ce qu'un taux nul exprime.
+     *
+     * Le taux se mesure **dans la base de la ligne du niveau**, comme le fait le trigger, et
+     * n'est jamais arrondi.
+     *
+     * @param array<int,array{price:float,base:string,origin:string}> $levels Niveaux calculés
+     * @param float                                                   $vat    TVA du produit
+     * @return array<int,array{pct:float|null,follow:bool}>
+     */
+    protected function computeRules(array $levels, $vat)
+    {
+        $rules = array(1 => array('pct' => null, 'follow' => false));
+
+        for ($level = 2; $level <= self::LEVELS; $level++) {
+            if (!$this->priceRuleSupported) {
+                $rules[$level] = array('pct' => null, 'follow' => false);
+                continue;
+            }
+
+            $target    = $levels[$level];
+            $reference = $this->amountAs($levels[1], $target['base'], $vat);
+            $pct       = aerotbPricePctFromAmount($reference, $target['price']);
+
+            if ($pct === null) {
+                // Le niveau 1 est à zéro : l'écart relatif n'a pas de sens. Le drapeau reste
+                // posé, le taux se calculera dès que l'article aura un prix de base.
+                $this->rulesWithoutBase++;
+            } elseif (abs($pct) <= self::RULE_TOLERANCE) {
+                $this->rulesFlat++;
+            } elseif ($pct < 0) {
+                $this->rulesMarkup++;
+            }
+
+            $rules[$level] = array('pct' => $pct, 'follow' => true);
+        }
+
+        return $rules;
+    }
+
+    /**
+     * La règle déjà en base est-elle celle qu'on veut poser ?
+     *
+     * @param array{pct:float|null,follow:bool} $current Règle lue en base
+     * @param array{pct:float|null,follow:bool} $rule    Règle voulue
+     * @return bool
+     */
+    protected function ruleMatches(array $current, array $rule)
+    {
+        if (!empty($current['follow']) !== !empty($rule['follow'])) {
+            return false;
+        }
+
+        $stored = isset($current['pct']) ? $current['pct'] : null;
+        $wanted = isset($rule['pct']) ? $rule['pct'] : null;
+
+        if ($stored === null || $wanted === null) {
+            return $stored === $wanted;
+        }
+
+        return abs($stored - $wanted) <= self::RULE_TOLERANCE;
+    }
+
+    /**
      * Écrit les huit niveaux de l'article, en ne touchant que ceux qui changent.
      *
      * @param stdClass $row        Ligne de f_article
@@ -689,8 +882,14 @@ class MigrationCustomerPrice extends AeroMigrationRunner
             $this->withoutBasePrice++;
         }
 
-        $levels  = $this->computeLevels($row);
-        $pending = array();
+        $levels = $this->computeLevels($row);
+        $rules  = $this->computeRules($levels, $product['tva']);
+
+        // Deux listes, parce qu'il y a deux façons d'être en retard : un prix à corriger, ou
+        // un prix déjà juste auquel il ne manque que son pilotage. La seconde est ce qui
+        // permet de brancher une grille existante sans la refaire.
+        $pending  = array();
+        $ruleOnly = array();
 
         foreach ($levels as $level => $target) {
             $this->origins[$target['origin']]++;
@@ -699,17 +898,24 @@ class MigrationCustomerPrice extends AeroMigrationRunner
                 ? $this->existingPrices[$productId][$level]
                 : null;
 
+            $priceMatches = false;
             if ($current !== null && $current['base'] === $target['base']) {
-                $stored = ($target['base'] === 'TTC') ? $current['price_ttc'] : $current['price'];
-                if (abs($stored - $target['price']) <= self::ROUNDING) {
-                    continue;
-                }
+                $stored       = ($target['base'] === 'TTC') ? $current['price_ttc'] : $current['price'];
+                $priceMatches = (abs($stored - $target['price']) <= self::ROUNDING);
             }
 
-            $pending[$level] = $target;
+            if (!$priceMatches) {
+                $pending[$level] = $target;
+                continue;
+            }
+
+            if ($this->priceRuleSupported && $current !== null && !empty($current['rowid'])
+                && !$this->ruleMatches($current, $rules[$level])) {
+                $ruleOnly[$level] = $rules[$level];
+            }
         }
 
-        if (empty($pending)) {
+        if (empty($pending) && empty($ruleOnly)) {
             return array('action' => 'skipped', 'id' => $productId);
         }
 
@@ -739,6 +945,13 @@ class MigrationCustomerPrice extends AeroMigrationRunner
 
             $target = $pending[$level];
 
+            // La règle voyage par le contexte : le trigger d'aerotoolbox l'inscrit sur la
+            // ligne de prix qu'il voit naître, sans la recalculer. C'est la seule façon de
+            // poser ces colonnes sans écrire soi-même dans une table du coeur.
+            if ($this->priceRuleSupported) {
+                $object->context['aerotb_price_rule'] = $rules[$level];
+            }
+
             // $ignore_autogen = 1 : l'autogénération régénérerait les niveaux 2 à 8 à partir
             // du premier et écraserait tout le travail (product.class.php:2784).
             $result = $object->updatePrice(
@@ -758,6 +971,10 @@ class MigrationCustomerPrice extends AeroMigrationRunner
             }
 
             $this->existingPrices[$productId][$level] = array(
+                // La ligne active vient de changer : le rowid retenu ne désigne plus rien.
+                // Aucun code ne le relit dans le même passage, un article n'étant vu qu'une
+                // fois, mais le laisser périmé serait un piège pour la suite.
+                'rowid'     => 0,
                 'price'     => ($target['base'] === 'TTC')
                     ? $target['price'] / (1 + ($product['tva'] / 100))
                     : $target['price'],
@@ -765,9 +982,34 @@ class MigrationCustomerPrice extends AeroMigrationRunner
                     ? $target['price']
                     : $target['price'] * (1 + ($product['tva'] / 100)),
                 'base'      => $target['base'],
+                'pct'       => $rules[$level]['pct'],
+                'follow'    => $rules[$level]['follow'],
             );
 
             $this->writtenLevels++;
+            if ($this->priceRuleSupported && $level > 1) {
+                $this->rulesWithPrice++;
+            }
+        }
+
+        // Le contexte ne doit pas survivre à la boucle : il vaudrait pour toute écriture de
+        // prix ultérieure sur cet objet.
+        unset($object->context['aerotb_price_rule']);
+
+        // Les niveaux dont le prix était déjà juste : seule la règle leur manquait. Passer par
+        // `updatePrice()` n'y créerait aucune ligne — le coeur n'en insère que si le prix a
+        // changé (product.class.php:2916) — et le trigger n'aurait donc rien à annoter.
+        foreach ($ruleOnly as $level => $rule) {
+            $rowid = (int) $this->existingPrices[$productId][$level]['rowid'];
+
+            if (aerotbPriceRuleWrite($this->db, $rowid, $rule['pct'], $rule['follow']) < 0) {
+                throw new Exception('Échec du pilotage du niveau '.$level.' (ligne '.$rowid.')');
+            }
+
+            $this->existingPrices[$productId][$level]['pct']    = $rule['pct'];
+            $this->existingPrices[$productId][$level]['follow'] = $rule['follow'];
+
+            $this->rulesAlone++;
         }
 
         return array('action' => $isNew ? 'created' : 'updated', 'id' => $productId);
@@ -811,8 +1053,11 @@ class MigrationCustomerPrice extends AeroMigrationRunner
             $this->withoutBasePrice++;
         }
 
-        $levels  = $this->computeLevels($row);
-        $pending = 0;
+        $levels = $this->computeLevels($row);
+        $rules  = $this->computeRules($levels, $this->productIndex[$refExt]['tva']);
+
+        $pending  = 0;
+        $ruleOnly = 0;
 
         foreach ($levels as $level => $target) {
             $this->origins[$target['origin']]++;
@@ -821,21 +1066,32 @@ class MigrationCustomerPrice extends AeroMigrationRunner
                 ? $this->existingPrices[$productId][$level]
                 : null;
 
+            $priceMatches = false;
             if ($current !== null && $current['base'] === $target['base']) {
-                $stored = ($target['base'] === 'TTC') ? $current['price_ttc'] : $current['price'];
-                if (abs($stored - $target['price']) <= self::ROUNDING) {
-                    continue;
-                }
+                $stored       = ($target['base'] === 'TTC') ? $current['price_ttc'] : $current['price'];
+                $priceMatches = (abs($stored - $target['price']) <= self::ROUNDING);
             }
 
-            $pending++;
+            if (!$priceMatches) {
+                $pending++;
+                if ($this->priceRuleSupported && $level > 1) {
+                    $this->rulesWithPrice++;
+                }
+                continue;
+            }
+
+            if ($this->priceRuleSupported && $current !== null && !empty($current['rowid'])
+                && !$this->ruleMatches($current, $rules[$level])) {
+                $ruleOnly++;
+            }
         }
 
-        if ($pending === 0) {
+        if ($pending === 0 && $ruleOnly === 0) {
             return 'skipped';
         }
 
         $this->writtenLevels += $pending;
+        $this->rulesAlone    += $ruleOnly;
 
         return empty($this->existingPrices[$productId]) ? 'created' : 'updated';
     }
@@ -984,6 +1240,34 @@ class MigrationCustomerPrice extends AeroMigrationRunner
         if ($this->neutralFamilyRules > 0) {
             $lines[] = '  '.str_pad((string) $this->neutralFamilyRules, 10, ' ', STR_PAD_LEFT)
                 .'  règles par famille sans effet (remise nulle), écartées';
+        }
+
+        if (!$this->priceRuleSupported) {
+            $lines[] = '';
+            $lines[] = 'Pilotage par le niveau 1 : indisponible.';
+            $lines[] = '  Les prix sont repris figés. Installez ou mettez à jour aerotoolbox, puis';
+            $lines[] = '  relancez ce script : il posera le pilotage sans retoucher un seul prix.';
+        } else {
+            $lines[] = '';
+            $lines[] = 'Pilotage par le niveau 1 :';
+            $lines[] = '  '.str_pad(number_format($this->rulesWithPrice, 0, ',', ' '), 10, ' ', STR_PAD_LEFT)
+                .'  règle(s) posée(s) en même temps que le prix';
+            if ($this->rulesAlone > 0) {
+                $lines[] = '  '.str_pad(number_format($this->rulesAlone, 0, ',', ' '), 10, ' ', STR_PAD_LEFT)
+                    .'  règle(s) posée(s) seule(s), le prix étant déjà juste';
+            }
+            $lines[] = '  '.str_pad(number_format($this->rulesFlat, 0, ',', ' '), 10, ' ', STR_PAD_LEFT)
+                .'  niveau(x) alignés sur le tarif de base, taux nul';
+            if ($this->rulesMarkup > 0) {
+                $lines[] = '  '.str_pad(number_format($this->rulesMarkup, 0, ',', ' '), 10, ' ', STR_PAD_LEFT)
+                    .'  niveau(x) plus chers que le tarif de base, taux négatif';
+            }
+            if ($this->rulesWithoutBase > 0) {
+                $lines[] = '  '.str_pad(number_format($this->rulesWithoutBase, 0, ',', ' '), 10, ' ', STR_PAD_LEFT)
+                    .'  niveau(x) sans taux calculable : le tarif de base est à zéro';
+                $lines[] = '            Le pilotage reste posé — le taux se calculera dès qu\'un prix'
+                    .' de base existera.';
+            }
         }
 
         if (!empty($this->discarded)) {

@@ -274,9 +274,13 @@ reprise en entier.
 
 **`llx_product_price`** — la colonne `import_key` y existe bien, mais `Product::_log_price()`
 ne l'écrit **jamais**, et l'y poser demanderait une requête directe. Le script
-`customerprice` se passe donc de marqueur : il **compare les valeurs**. Le prix calculé est
-confronté à celui déjà en base, et `updatePrice()` n'est appelée que s'ils diffèrent de plus
-d'un demi-centime. Un second passage n'écrit rien.
+`customerprice` se passe donc de marqueur : il **compare les valeurs**. La comparaison porte
+sur le **triplet** (prix, taux de remise, drapeau de pilotage), et `updatePrice()` n'est
+appelée que si le prix diffère de plus d'un demi-centime. Un second passage n'écrit rien.
+
+Le taux et le drapeau comptent autant que le prix : sans eux, un catalogue déjà tarifé serait
+sauté d'entrée et ne recevrait jamais son pilotage. Quand seule la règle manque, elle est posée
+seule — sans créer de ligne d'historique, le cœur n'en insérant que si le prix a changé.
 
 Ce seuil n'est pas une commodité : `llx_product.price` est arrondi au centime là où
 `llx_product_price` conserve huit décimales. Comparer strictement ferait rejouer huit lignes
@@ -305,6 +309,31 @@ La correspondance est portée par `aeromigration_price_level()`, en un seul endr
 `MigrationThirdparty` et `MigrationPriceLevel` l'appellent tous les deux — les faire diverger
 reviendrait à facturer une partie du fichier client au mauvais tarif, sans que rien ne
 le signale.
+
+### Les niveaux 2 à 8 suivent le niveau 1
+
+Un prix figé se démode : au premier changement du tarif de base, les sept autres niveaux
+restent en arrière et la politique commerciale se perd. `customerprice` pose donc, en même
+temps que chaque prix, la règle de pilotage d'`aerotoolbox` — le drapeau
+`aerotb_price_follow` et l'écart au niveau 1 dans `aerotb_price_pct`. Le prix écrit ne change
+pas d'un centime ; il devient dérivable.
+
+**Le taux est dérivé des deux prix, jamais recopié de la source.** Une remise de famille à 5 %
+donne un prix arrondi au centime, dont l'écart réel vaut 5,01 % ou 4,98 %. Garder ce
+chiffre-là préserve l'arrondi d'étiquette au prochain changement du tarif de base ; stocker
+5 % rond le ferait sauter. Le prix fait foi, le taux mémorise l'écart.
+
+Le niveau 1 est la référence et ne se suit pas lui-même. Tous les autres le suivent, **y
+compris ceux dont le prix lui est identique** : un niveau aligné sur le tarif de base doit le
+rester quand celui-ci bouge, et c'est ce qu'un taux nul exprime.
+
+**Aucune écriture directe dans ces deux colonnes** : la règle est passée au trigger par
+`$product->context['aerotb_price_rule']`, qui l'inscrit sur la ligne de prix qu'il voit naître.
+Quand seul le pilotage manque, `aerotbPriceRuleWrite()` le pose sans créer de ligne.
+
+Le pilotage tient à la présence d'`aerotoolbox` et de ses deux colonnes. Sans elles, le script
+reprend les tarifs **figés** et le dit au rapport : les poser plus tard ne demandera qu'un
+nouveau passage, qui ne retouchera aucun prix.
 
 ### ⚠️ Suspendre Prestasync pendant toute la mise à jour des tarifs
 
@@ -357,6 +386,16 @@ date ne sert qu'à l'écran « Stock à une date » et à la lisibilité de l'hi
 À noter que `llx_product_stock` porte bien un `import_key`, mais **aucune classe du coeur ne
 l'écrit** — il n'existe pas d'objet métier pour cette table. L'utiliser aurait imposé une
 requête directe.
+
+## Produits composés
+
+184 articles de la source sont composés d'autres articles — des lots commerciaux, dont le plus
+vendu compte 947 ventes jusqu'au 28 juillet 2026. La composition **n'est pas reprise** à ce
+jour : ces articles existent dans Dolibarr comme des articles ordinaires.
+
+L'analyse est dans [PRODUITS_COMPOSES.md](PRODUITS_COMPOSES.md) : nature des compositions,
+vitalité réelle, cinq anomalies à élucider, et les cinq questions à faire trancher au client
+avant d'engager quoi que ce soit. Le sujet est métier avant d'être technique.
 
 ## Anomalies de la source
 

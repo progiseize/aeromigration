@@ -6,6 +6,81 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.12.8] — 2026-08-14
+
+### Les tarifs repris sont pilotés par le niveau 1
+
+Un prix figé se démode. Au premier changement du tarif de base, les sept autres niveaux
+restaient en arrière et la politique commerciale se perdait — c'est exactement ce que faisait
+l'ancien ERP, où la remise était réappliquée à la main, article par article.
+
+Le script pose désormais, en même temps que chaque prix, la règle de pilotage d'aerotoolbox :
+le drapeau `aerotb_price_follow` et l'écart au niveau 1 dans `aerotb_price_pct`. **Le prix
+écrit ne change pas d'un centime** ; il devient seulement dérivable.
+
+**Le taux est dérivé des deux prix, jamais recopié depuis la source.** Quand la source porte une
+remise de famille à 5 %, le prix qui en découle a été arrondi au centime et l'écart réel vaut
+5,01 % ou 4,98 %. C'est ce chiffre-là qu'il faut garder : stocker 5 % rond ferait sauter
+l'arrondi d'étiquette au premier changement du tarif de base. C'est la doctrine d'aerotoolbox —
+le prix fait foi, le taux mémorise l'écart.
+
+**Aucune écriture directe dans ces deux colonnes.** La règle est passée au trigger par
+`$product->context['aerotb_price_rule']`, et c'est lui qui l'inscrit sur la ligne de prix qu'il
+voit naître. Quand seul le pilotage manque — le prix étant déjà juste —, `aerotbPriceRuleWrite()`
+le pose directement.
+
+### Une grille déjà en place se branche sans être refaite
+
+C'est la conséquence qui compte. La comparaison ne portait que sur le prix : un catalogue déjà
+tarifé était sauté d'entrée, et n'aurait jamais reçu ses règles. Elle porte maintenant sur le
+**triplet** — prix, taux, drapeau — et sépare deux cas : le prix à corriger, et le prix juste
+auquel il ne manque que son pilotage.
+
+Le second ne crée **aucune ligne d'historique** : le cœur n'en insère que si le prix a changé
+(product.class.php:2916). Mesuré directement — 1 000 articles traités, 7 000 règles posées,
+`llx_product_price` inchangée à la ligne près.
+
+Il n'y a donc pas de purge à jouer, ni de script de rattrapage à écrire.
+
+### Vérifications
+
+Passage complet sur les 15 908 articles, en 41,6 s :
+
+```
+14 408  articles branchés          100 856 règles  (14 408 × 7)
+     0  ligne d'historique créée
+91 079  niveaux alignés sur le tarif de base, taux nul
+    50  niveaux plus chers, taux négatif
+ 5 915  niveaux sans taux calculable — 845 articles sans prix de base
+```
+
+**Propagation vérifiée de bout en bout.** Le niveau 1 d'un article passé de 120,00 à 150,00 TTC
+entraîne le niveau 3 à 132,00 (−12 %) et le niveau 4 à 104,81 (−30,125 %) ; les niveaux à taux
+nul suivent à 150,00. Article remis dans son état ensuite.
+
+**Second passage : 0 écriture, 15 908 ignorés, 3,8 s.**
+
+**Aucune ligne active n'échappe au pilotage.** Douze lignes des niveaux 2 à 8 portent encore un
+drapeau à zéro : toutes sont de l'historique, qui doit rester tel qu'il était.
+
+### Le script continue sans aerotoolbox
+
+Le pilotage tient à deux choses — la bibliothèque `aeroprice.lib.php` et ses deux colonnes —, et
+l'absence de l'une des deux n'est pas une erreur : les tarifs se reprennent très bien sans, ils
+sont seulement figés. Le rapport le dit et invite à relancer une fois le module en place, ce qui
+posera le pilotage sans retoucher un seul prix.
+
+Éprouvé pour de vrai : la bibliothèque a disparu en cours de route, la copie de travail
+d'aerotoolbox étant passée sur une branche antérieure à sa 1.9.0. Le script a repris les tarifs
+et l'a signalé, au lieu de tomber.
+
+### Ce qui reste hors du champ
+
+Les 1 004 produits qui ne viennent pas d'ADD ne sont pas touchés — ni leurs prix, ni leur
+pilotage. Poser une politique tarifaire sur des articles que la reprise ne connaît pas relève de
+l'exploitation, pas de la reprise : c'est à aerotoolbox de le faire, à côté du mécanisme lui-même.
+
+
 ## [0.12.7] — 2026-08-13
 
 ### Les produits naissent à leur date d'origine
