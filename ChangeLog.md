@@ -6,6 +6,74 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.13.1] — 2026-08-16
+
+### Les factures émises sur des commandes annulées sont supprimables
+
+En juin 2026, la synchronisation de la boutique a rattrapé tout l'historique PrestaShop et créé
+**28 474 factures d'un coup**, datées de 2023 à 2026. Parmi les commandes ainsi facturées,
+**345 étaient annulées dans ADD depuis des mois** — mais l'annulation n'avait jamais été poussée
+vers PrestaShop, où elles figuraient toujours comme validées.
+
+La liaison a donc travaillé sur une donnée fausse en amont : **ce n'est pas un défaut du module
+de synchronisation**, et il n'y a rien à corriger de ce côté. La divergence est entre ADD et
+PrestaShop.
+
+`scripts/delete_invoices_cancelled_orders.php` supprime celles qui n'ont aucune raison d'exister.
+
+```
+php delete_invoices_cancelled_orders.php                    dénombre et liste
+php delete_invoices_cancelled_orders.php --confirm          applique
+php delete_invoices_cancelled_orders.php --limit=20 --confirm    par petits lots
+```
+
+**Six conditions, toutes requises.** La facture est rattachée à une commande reprise d'ADD ; la
+commande y est marquée annulée ; la facture n'a pas de `ref_ext` de reprise — elle est née dans
+Dolibarr et n'a donc aucune contrepartie dans l'ancien ERP ; elle est validée et non payée ; elle
+ne porte aucun règlement ; **et la commande n'a aucune préparation de livraison dans ADD.**
+
+La sixième est la moins évidente et la plus importante. Une préparation de livraison signifie que
+la marchandise a bougé : la vente a probablement eu lieu et l'annulation dans ADD n'est qu'une
+écriture administrative. Croisée avec le règlement, elle trie le gisement :
+
+```
+sans préparation, non payée ... 311 factures, 37 917,44 €  → supprimées
+préparée ET payée ...........  15 factures,  2 270,01 €  → ventes réelles, épargnées
+payée sans préparation ......   9 factures,  2 275,60 €  → épargnées, à arbitrer
+préparée sans paiement ......   1 facture,     310,00 €  → épargnée, à arbitrer
+```
+
+Sur 336 factures, **dix seulement demandent un arbitrage**. Les 311 ont été supprimées ; le parc
+passe de 182 483 à 182 172 factures, sans laisser une ligne, un lien ni un règlement orphelin.
+
+### Comment la suppression passe, là où la 0.12.5 la disait impossible
+
+`fix_invoice_signs.php` notait qu'`is_erasable()` refuse de supprimer une facture qui n'est pas la
+dernière de sa séquence (-2, `commoninvoice.class.php:869`). C'est exact — mais la même méthode
+**retourne 1 sans aucun autre contrôle** quand la facture est un brouillon dont la référence
+commence par « PROV » (ligne 827). Le chemin existe donc, et c'est celui du coeur :
+
+1. `setDraft()` — ne touche que `fk_statut`, la référence y survit ;
+2. la référence devient `(PROVDEL<rowid>)` — préfixe distinct des trois `(PROV…)` déjà en base,
+   pour ne pas heurter la contrainte unique `uk_facture_ref` ;
+3. `delete()` — `is_erasable()` répond 1, la pièce et ses liens partent.
+
+Le répertoire de documents est retiré **après**, à partir de la référence d'origine : `delete()`
+le cherche sous le nom temporaire et laisserait l'ancien orphelin.
+
+Rien ne remonte vers PrestaShop, vérifié avant d'écrire : le trigger `aeropresta` n'écoute que
+catégories, produits et stock, celui de `prestasync` que des événements de commande. En revanche
+`prestasync` **a** un `orderCancel` — annuler les 345 commandes, elle, propagerait bien
+l'annulation vers la boutique.
+
+### Le script sait où lire la source, comme les autres
+
+`--source-db=NOM` et la constante `AEROMIG_SOURCE_DB` sont honorées avec la même résolution que
+les scripts de reprise, et l'accès à la table source est contrôlé avant tout travail : sans ce
+contrôle, l'erreur ne surgissait qu'au milieu du repérage, avec un message SQL que rien ne relie à
+un problème de configuration.
+
+
 ## [0.13.0] — 2026-08-14
 
 ### Les articles composés sont liés

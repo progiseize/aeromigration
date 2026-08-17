@@ -439,15 +439,15 @@ aeromigration/
     ├── migrate.php              lance une reprise
     ├── purge.php                défait ce qu'une reprise a produit
     ├── import_add_csv.php       charge l'export de l'éditeur
-    └── fix_invoice_signs.php    correctif ponctuel, voir ci-dessous
+    ├── fix_invoice_signs.php    correctif ponctuel, voir ci-dessous
+    └── delete_invoices_cancelled_orders.php   idem
 ```
 
 ### Correctifs ponctuels
 
 `fix_invoice_signs.php` répare les factures reprises avant la 0.12.5, dont les lignes à
-quantité **et** prix négatifs portaient un total inversé. Il corrige en place, sans supprimer
-— `is_erasable()` interdit de retirer une facture au milieu d'une séquence — et conserve la
-référence.
+quantité **et** prix négatifs portaient un total inversé. Il corrige en place, sans supprimer,
+et conserve la référence.
 
 ```
 php fix_invoice_signs.php              dénombre et liste
@@ -455,6 +455,30 @@ php fix_invoice_signs.php --confirm    applique
 ```
 
 Sans effet sur une base reprise avec la 0.12.5 ou au-delà : il ne trouve alors rien à corriger.
+
+`delete_invoices_cancelled_orders.php` supprime les factures que la synchronisation de la
+boutique a produites sur des commandes **annulées dans ADD**. Le rattrapage de juin 2026 en a
+créé 345 : l'annulation n'avait jamais été poussée d'ADD vers PrestaShop, où ces commandes
+figuraient toujours comme validées. La liaison a donc travaillé sur une donnée fausse en amont
+— rien à corriger de son côté.
+
+```
+php delete_invoices_cancelled_orders.php                        dénombre et liste
+php delete_invoices_cancelled_orders.php --confirm              applique
+php delete_invoices_cancelled_orders.php --limit=20 --confirm   par petits lots
+```
+
+Il n'agit que si **six** conditions sont réunies, dont deux qui protègent les ventes réelles :
+la facture ne doit porter **aucun règlement**, et sa commande **aucune préparation de livraison
+dans ADD** — une préparation signifie que la marchandise a bougé. Les 311 factures supprimées
+étaient sans paiement, sans préparation et sans contrepartie dans l'ancien ERP ; 25 autres,
+préparées ou encaissées, sont épargnées et laissées à l'arbitrage du client.
+
+Contrairement à `fix_invoice_signs.php`, il supprime : `is_erasable()` accepte sans condition un
+brouillon dont la référence commence par `(PROV`, ce qui ouvre un chemin que la 0.12.5 croyait
+fermé. Voir **P18** dans [ANOMALIES.md](ANOMALIES.md), et
+[FACTURES_SUR_COMMANDES_ANNULEES.md](FACTURES_SUR_COMMANDES_ANNULEES.md) pour l'état des lieux
+remis au client.
 
 ## Ajouter un script de reprise
 
