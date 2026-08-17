@@ -18,6 +18,12 @@
  *   --batch=N        Taille des tranches de lecture (défaut : 200)
  *   --cursor=N       Reprend le parcours après cette valeur de curseur
  *   --update         Met à jour les objets déjà migrés au lieu de les ignorer
+ *   --only=VOLETS    Ne réécrit que les volets nommés, séparés par des virgules, au lieu de
+ *                    rejouer tout le mapping. Implique --update, et ne visite QUE l'existant :
+ *                    aucun objet n'est créé. Les volets acceptés dépendent du script, qui
+ *                    refuse de démarrer si l'un d'eux lui est inconnu — ou s'il ne gère pas
+ *                    l'option du tout, plutôt que de la passer sous silence.
+ *                    « product » accepte : datec, category, fields
  *   --user=LOGIN     Utilisateur au nom duquel créer les objets (défaut : 1er admin)
  *   --date=AAAA-MM-JJ  Date des écritures qui n'en ont pas dans la source
  *   --filter="SQL"   Condition ajoutée au filtre de lecture, pour reprendre un
@@ -121,6 +127,7 @@ $userLogin      = '';
 $referenceDate  = 0;
 $sourceDb       = '';
 $sourceDbSet    = false;
+$onlyFields     = array();
 
 for ($i = 1; $i < $argc; $i++) {
     $arg = $argv[$i];
@@ -129,6 +136,14 @@ for ($i = 1; $i < $argc; $i++) {
         $dryrun = true;
     } elseif ($arg === '--update') {
         $updateExisting = true;
+    } elseif (preg_match('/^--only=(.+)$/', $arg, $m)) {
+        // Réécriture ciblée. Les volets acceptés dépendent du script ; ils sont contrôlés
+        // plus bas, une fois celui-ci connu.
+        $onlyFields = array_values(array_filter(array_map('trim', explode(',', $m[1]))));
+        if (empty($onlyFields)) {
+            echo "La liste de --only est vide.\n";
+            exit(1);
+        }
     } elseif (preg_match('/^--limit=(\d+)$/', $arg, $m)) {
         $limit = (int) $m[1];
     } elseif (preg_match('/^--batch=(\d+)$/', $arg, $m)) {
@@ -185,7 +200,8 @@ $scripts = aeromigrationGetScripts();
 
 if ($scriptCode === '') {
     echo "Usage: php ".$script_file." <script> [--dry-run] [--limit=N] [--batch=N] [--cursor=N]"
-        ." [--update] [--user=LOGIN] [--date=AAAA-MM-JJ] [--filter=\"SQL\"] [--source-db=NOM]\n\n";
+        ." [--update] [--only=VOLETS] [--user=LOGIN] [--date=AAAA-MM-JJ] [--filter=\"SQL\"]"
+        ." [--source-db=NOM]\n\n";
     echo "Scripts disponibles :\n";
     if (empty($scripts)) {
         echo "  (aucun)\n";
@@ -285,6 +301,31 @@ if ($updateExisting) {
     $runner->updateExisting = true;
 }
 
+// Réécriture ciblée : validée ici, une fois le script connu de lui seul dépendant. Un volet
+// inconnu arrête tout — l'accepter en silence réécrirait l'ensemble en laissant croire le
+// contraire, ce qui est le pire des deux mondes.
+if (!empty($onlyFields)) {
+    $supported = $runner->supportedOnlyFields();
+
+    if (empty($supported)) {
+        echo "Le script « ".$definition['code']." » ne gère pas --only.\n";
+        echo "Sans cette option, --update réécrit l'ensemble des champs.\n";
+        exit(1);
+    }
+
+    $unknown = array_diff($onlyFields, $supported);
+    if (!empty($unknown)) {
+        echo "Volet inconnu pour « ".$definition['code']." » : ".implode(', ', $unknown)."\n";
+        echo "Volets acceptés : ".implode(', ', $supported)."\n";
+        exit(1);
+    }
+
+    // --only n'a de sens que sur l'existant, qu'il faut donc autoriser à revisiter. L'exiger en
+    // plus de --update n'apporterait rien : les deux disent la même chose.
+    $runner->onlyFields     = $onlyFields;
+    $runner->updateExisting = true;
+}
+
 // Même précaution : sans --date, on laisse au script sa propre valeur.
 if ($referenceDate > 0) {
     $runner->referenceDate = $referenceDate;
@@ -302,6 +343,9 @@ if ($runner->sourceDb !== '') {
     echo "Base source     : ".$runner->sourceDb."\n";
 }
 echo "Mode            : ".($dryrun ? "SIMULATION (aucune écriture)" : "ÉCRITURE")."\n";
+if (!empty($onlyFields)) {
+    echo "Réécriture      : ".implode(', ', $onlyFields)." uniquement, sur l'existant\n";
+}
 echo "Tranche         : ".$batch."\n";
 if ($cursor !== null && $cursor !== '') {
     echo "Reprise après   : ".$cursor."\n";

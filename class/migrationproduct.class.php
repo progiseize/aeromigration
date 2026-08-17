@@ -558,6 +558,21 @@ class MigrationProduct extends AeroMigrationRunner
     protected function previewAction($row, $existingId)
     {
         if ($existingId > 0) {
+            // En réécriture ciblée sur la seule date, la simulation dit ce que le passage réel
+            // ferait : rien, si la valeur en base est déjà celle de la source. C'est ce qui
+            // permet de mesurer l'ampleur du rattrapage avant de le lancer.
+            if (!empty($this->onlyFields) && $this->onlyFields === array('datec')) {
+                $current = $this->currentCreationDate($existingId);
+                $wanted  = $this->sourceCreationDate($row);
+
+                if ($wanted <= 0) {
+                    $this->creationDateMissing++;
+                    return 'skipped';
+                }
+
+                return ($current === $wanted) ? 'skipped' : 'updated';
+            }
+
             return 'updated';
         }
 
@@ -655,17 +670,30 @@ class MigrationProduct extends AeroMigrationRunner
             // Relevée avant le mapping : c'est la valeur réellement en base, seule
             // comparable à celle de la source.
             $currentDate = (int) $product->date_creation;
+            $touched     = false;
 
-            $this->mapFields($product, $row);
+            // Sans --only, writes() répond « oui » partout et le comportement est celui d'avant.
+            if ($this->writes('fields')) {
+                $this->mapFields($product, $row);
 
-            if ($product->update($existingId, $this->user) <= 0) {
-                throw new Exception('Échec de la mise à jour : '.$this->objectErrors($product));
+                if ($product->update($existingId, $this->user) <= 0) {
+                    throw new Exception('Échec de la mise à jour : '.$this->objectErrors($product));
+                }
+                $touched = true;
             }
 
-            $this->applyCategory($product, $row);
-            $this->applySourceCreationDate($product, $row, $currentDate);
+            if ($this->writes('category')) {
+                $this->applyCategory($product, $row);
+                $touched = true;
+            }
 
-            return array('action' => 'updated', 'id' => $existingId);
+            if ($this->writes('datec')) {
+                $touched = $this->applySourceCreationDate($product, $row, $currentDate) || $touched;
+            }
+
+            // En réécriture ciblée, un produit dont la valeur était déjà juste n'a rien reçu :
+            // le compter « mis à jour » gonflerait le rapport d'un travail qui n'a pas eu lieu.
+            return array('action' => $touched ? 'updated' : 'skipped', 'id' => $existingId);
         }
 
         // ── Adoption d'un produit venu de la boutique ──────────────────────
@@ -747,6 +775,35 @@ class MigrationProduct extends AeroMigrationRunner
     }
 
     /**
+     * Date de création actuellement en base, sans charger la fiche.
+     *
+     * Sert à la simulation de `--only=datec`, qui doit annoncer ce que le passage réel ferait
+     * sans rien écrire. Un `Product::fetch()` complet coûterait ici une dizaine de requêtes par
+     * article — sur 15 909, la simulation durerait plus longtemps que la reprise qu'elle
+     * annonce. Une seule colonne suffit à répondre.
+     *
+     * @param  int $productId Identifiant du produit
+     * @return int            Timestamp, 0 si absent ou illisible
+     */
+    protected function currentCreationDate($productId)
+    {
+        $sql   = 'SELECT datec FROM '.MAIN_DB_PREFIX.'product WHERE rowid = '.((int) $productId);
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            return 0;
+        }
+
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+
+        if (!$obj || empty($obj->datec)) {
+            return 0;
+        }
+
+        return (int) $this->db->jdate($obj->datec);
+    }
+
+    /**
      * Date de création portée par la source, ou 0 si elle n'en porte aucune.
      *
      * @param stdClass $row Ligne source
@@ -785,11 +842,11 @@ class MigrationProduct extends AeroMigrationRunner
         $wanted = $this->sourceCreationDate($row);
         if ($wanted <= 0) {
             $this->creationDateMissing++;
-            return;
+            return false;
         }
 
         if ((int) $currentDate === $wanted) {
-            return;
+            return false;
         }
 
         $result = $product->setValueFrom('datec', $wanted, 'product', (int) $product->id, 'date', 'rowid', $this->user);
@@ -799,6 +856,8 @@ class MigrationProduct extends AeroMigrationRunner
 
         $product->date_creation = $wanted;
         $this->creationDateFixed++;
+
+        return true;
     }
 
     /**
@@ -810,8 +869,32 @@ class MigrationProduct extends AeroMigrationRunner
      */
     protected function validateRow($row)
     {
+        // En réécriture ciblée hors « fields », le mapping n'est pas joué : l'exécuter en
+        // simulation ferait compter en erreur des lignes que le passage réel ne lirait même pas.
+        if (!$this->writes('fields')) {
+            return;
+        }
+
         $product = new Product($this->db);
         $this->mapFields($product, $row);
+    }
+
+    /**
+     * Volets réécrivables isolément par `--only`.
+     *
+     *   fields    les champs de la fiche article, via mapFields() puis update()
+     *   category  le rattachement aux catégories
+     *   datec     la date de création, reprise de AR_DateCreation
+     *
+     * `datec` est le cas qui a motivé l'option : `Product::update()` n'écrit jamais `datec`,
+     * seul `setValueFrom()` le peut. Rejouer tout le mapping de 15 909 articles pour poser une
+     * date revenait à réécrire des dizaines de champs sans nécessité.
+     *
+     * @return array<int,string>
+     */
+    public function supportedOnlyFields()
+    {
+        return array('fields', 'category', 'datec');
     }
 
     /**

@@ -194,6 +194,27 @@ condition est ajoutée à celle du script. Elle sert aux rattrapages ciblés, et
 reprendre d'une instance à l'autre exactement le même échantillon, seul moyen de comparer
 une reprise locale à une reprise en ligne client par client.
 
+### Corriger un seul champ : `--only`
+
+`--update` rejoue tout le mapping. Pour ne réécrire qu'un volet :
+
+```
+php migrate.php product --only=datec --dry-run    mesure le rattrapage
+php migrate.php product --only=datec              l'applique
+```
+
+`product` accepte `fields` (la fiche), `category` (les catégories) et `datec` (la date de
+création, que `Product::update()` n'écrit jamais — seul `setValueFrom()` le peut).
+
+L'option **implique `--update`** et ne visite **que l'existant** : aucun objet n'est créé, « ne
+toucher qu'un champ » n'ayant de sens que sur ce qui existe déjà. Les scripts qui ne la gèrent
+pas, ou un volet mal orthographié, **arrêtent l'exécution** au lieu de laisser croire à une
+réécriture ciblée là où tout aurait été rejoué.
+
+Un enregistrement dont la valeur était déjà juste est compté « ignoré », non « mis à jour » : le
+rapport annonce le travail réellement fait. Vérifié colonne par colonne — seules la valeur voulue,
+`tms` et `fk_user_modif` changent.
+
 ```
 php migrate.php customerorder --dry-run --filter="DO_Tiers IN ('100568','110441')"
 ```

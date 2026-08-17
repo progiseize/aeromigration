@@ -6,6 +6,56 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.13.3] — 2026-08-17
+
+### `--only=VOLETS` : réécrire un champ sans rejouer tout le mapping
+
+`product --update` rejouait `mapFields()` puis `update()` sur les 15 909 articles pour corriger
+une seule colonne. Long, et surtout disproportionné : des dizaines de champs réécrits là où un
+seul était en cause.
+
+```
+php migrate.php product --only=datec --dry-run    mesure le rattrapage
+php migrate.php product --only=datec              l'applique
+```
+
+**Trois volets pour `product`** : `fields` (la fiche, via `mapFields()` + `update()`), `category`
+(le rattachement aux catégories) et `datec` (la date de création). Ce dernier est le cas qui a
+motivé l'option — `Product::update()` n'écrit jamais `datec`, seul `setValueFrom()` le peut.
+
+**L'option implique `--update` et ne visite QUE l'existant.** Créer un objet absent en prétendant
+ne toucher qu'un champ serait contradictoire ; sur `product`, cela ferait naître des articles au
+milieu d'un simple rattrapage de dates.
+
+**Un script qui ne sait pas l'honorer refuse de démarrer**, au lieu de l'ignorer :
+
+```
+$ php migrate.php productkit --only=datec
+Le script « productkit » ne gère pas --only.
+Sans cette option, --update réécrit l'ensemble des champs.
+
+$ php migrate.php product --only=nawak
+Volet inconnu pour « product » : nawak
+Volets acceptés : fields, category, datec
+```
+
+Une option silencieusement sans effet ferait croire à une reprise ciblée là où tout aurait été
+réécrit — l'inverse de ce qu'on demandait.
+
+**La simulation dit ce que le passage réel ferait.** En `--only=datec`, elle compare la date en
+base à celle de la source et n'annonce que les écarts, sans charger les fiches : `Product::fetch()`
+coûte une dizaine de requêtes par article, et la simulation aurait duré plus longtemps que la
+reprise qu'elle annonce. Mesuré sur 300 articles : **294 à corriger, 6 déjà justes, 0 création**.
+
+De même, un produit dont la valeur était déjà juste est compté « ignoré » et non « mis à jour » :
+le rapport ne gonfle pas d'un travail qui n'a pas eu lieu.
+
+**Contrôle colonne par colonne**, photographie de la table avant et après sur un échantillon :
+seules `datec`, `tms` et `fk_user_modif` changent. Les deux dernières sont les traces inévitables
+de toute écriture — `tms` sur n'importe quel `UPDATE`, `fk_user_modif` posé par `setValueFrom()`.
+**Aucun champ métier n'est touché.**
+
+
 ## [0.13.2] — 2026-08-16
 
 ### `productkit` échouait en ligne, et nulle part ailleurs

@@ -253,6 +253,54 @@ abstract class AeroMigrationRunner
     /** @var bool Mettre à jour les objets déjà migrés au lieu de les ignorer */
     public $updateExisting = false;
 
+    /**
+     * Volets à réécrire, quand on ne veut pas de la mise à jour complète.
+     *
+     * Vide, une mise à jour rejoue tout le mapping : sur 15 909 articles, c'est long et cela
+     * réécrit des dizaines de champs pour en corriger un seul. Renseigné, le script ne touche
+     * qu'à ce qui est demandé.
+     *
+     * **Deux garde-fous, l'un et l'autre volontaires :**
+     *
+     * Un script qui ne sait pas honorer l'option REFUSE de démarrer, plutôt que de l'ignorer.
+     * Une option silencieusement sans effet ferait croire à une reprise ciblée là où tout
+     * aurait été réécrit — l'inverse de ce qu'on demandait.
+     *
+     * Et rien n'est créé : seuls les enregistrements déjà repris sont visités. « Ne toucher
+     * qu'un champ » n'a de sens que sur ce qui existe ; créer au passage des objets absents
+     * dépasserait l'intention et rendrait le résultat imprévisible.
+     *
+     * @var array<int,string>
+     */
+    public $onlyFields = array();
+
+    /**
+     * Volets que ce script sait réécrire isolément.
+     *
+     * Tableau vide — le défaut — signifie que le script ne gère pas `--only`, et le lanceur le
+     * dira au lieu de laisser croire à une reprise ciblée.
+     *
+     * @return array<int,string>
+     */
+    public function supportedOnlyFields()
+    {
+        return array();
+    }
+
+    /**
+     * Ce volet doit-il être réécrit lors de ce passage ?
+     *
+     * Sans `--only`, tout est à réécrire : la réponse est donc « oui » par défaut, et les
+     * scripts peuvent semer cet appel sans changer leur comportement habituel.
+     *
+     * @param  string $field Nom du volet
+     * @return bool
+     */
+    protected function writes($field)
+    {
+        return empty($this->onlyFields) || in_array($field, $this->onlyFields, true);
+    }
+
     /** @var int|string|null Curseur de départ : reprend là où un passage s'est arrêté */
     public $startCursor = null;
 
@@ -904,6 +952,14 @@ abstract class AeroMigrationRunner
 
         // Déjà migré et pas de mise à jour demandée : on passe.
         if ($existingId > 0 && !$this->updateExisting) {
+            $this->stats['skipped']++;
+            return;
+        }
+
+        // Réécriture ciblée : on ne visite que l'existant. Créer un objet absent en prétendant
+        // ne toucher qu'un champ serait contradictoire — et sur « product », cela ferait naître
+        // des articles au milieu d'un simple rattrapage de dates.
+        if ($existingId <= 0 && !empty($this->onlyFields)) {
             $this->stats['skipped']++;
             return;
         }
