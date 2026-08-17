@@ -6,6 +6,34 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.14.0] — 2026-08-17
+
+### Ajouté — `sync_kit_tracking.php` : aligner les produits composés sur leurs composants
+
+Le module aerotoolbox 1.13.0 pose une règle : **un lot n'a pas d'état propre, il reflète ses
+composants.** Son suivi vient d'eux, un composant qu'on ne commercialise plus rend le lot invendable,
+et un lot qu'aucun stock ne permet d'assembler devient indisponible.
+
+Cette règle s'applique à chaque enregistrement — donc **seulement aux fiches qu'on rouvre**. Les lots
+déjà en base gardent l'état qu'ils portaient : un lot inassemblable depuis toujours n'a jamais été
+examiné par personne, et le catalogue l'affiche « Disponible ». Ce script les reprend d'un coup.
+
+Deux passes. La première aligne le **suivi**, la seconde confronte la **disponibilité** à l'état des
+composants puis au stock assemblable. Sans `--confirm`, il détaille ce qu'il ferait sans rien écrire ;
+`--tracking-only` laisse les disponibilités de côté ; `--quiet` réduit la sortie au bilan.
+
+Il ne touche jamais deux choses : une disponibilité plus contraignante que ne l'exigent les
+composants — elle vient d'une décision, et le calcul ne fait que durcir — et les lots dont le couple
+disponibilité/suivi cible n'existe pas dans la configuration.
+
+Rejouable, idempotent : relancé après coup, il ne trouve plus rien à faire. Sur le catalogue repris,
+**12 suivis** et **17 disponibilités** corrigés, 16 lots laissés en l'état, 12 hors périmètre faute de
+disponibilité posée.
+
+**Le module aerotoolbox doit être réactivé avant de le lancer** : la mémorisation de la disponibilité
+d'origine, qui permet à un lot temporairement indisponible de revenir seul, repose sur un champ créé
+à l'activation.
+
 ## [0.13.3] — 2026-08-17
 
 ### `--only=VOLETS` : réécrire un champ sans rejouer tout le mapping

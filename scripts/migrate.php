@@ -344,7 +344,10 @@ if ($runner->sourceDb !== '') {
 }
 echo "Mode            : ".($dryrun ? "SIMULATION (aucune écriture)" : "ÉCRITURE")."\n";
 if (!empty($onlyFields)) {
-    echo "Réécriture      : ".implode(', ', $onlyFields)." uniquement, sur l'existant\n";
+    // « --update implicite » plutôt que rien : sans cette mention, on peut croire que l'option
+    // reste sans effet faute d'avoir passé --update, alors qu'elle l'active d'elle-même.
+    echo "Réécriture      : ".implode(', ', $onlyFields)." uniquement, sur l'existant"
+        ." (--update implicite, aucune création)\n";
 }
 echo "Tranche         : ".$batch."\n";
 if ($cursor !== null && $cursor !== '') {
