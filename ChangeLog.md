@@ -6,6 +6,52 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.13.2] — 2026-08-16
+
+### `productkit` échouait en ligne, et nulle part ailleurs
+
+En ligne, le script s'arrêtait sur `Source : -1 enregistrement(s)` et une seule erreur :
+
+```
+Illegal mix of collations (utf8mb3_general_ci,IMPLICIT)
+                     and (utf8mb3_unicode_ci,IMPLICIT) for operation '='
+```
+
+**La cause n'est pas dans les données.** Le script compare `AR_Ref`, un `varchar`, à `NO_RefDet`,
+un **entier**. Or `CAST(<entier> AS CHAR)` ne tient pas sa collation d'une table : il prend celle
+de la **connexion**. Dès qu'elle diffère de la collation des tables tout en partageant leur jeu de
+caractères, MySQL refuse la comparaison. C'est le cas de l'instance en ligne — tables en
+`utf8mb3_general_ci`, connexion Dolibarr en `utf8mb3_unicode_ci`.
+
+**Et l'anomalie se cache remarquablement bien :**
+
+```
+en développement ... tables utf8mb4, connexion utf8mb3  → charsets différents, MySQL convertit, passe
+dans phpMyAdmin .... connexion utf8mb4                  → même raison, la requête rend bien 181
+depuis Dolibarr .... tables utf8mb3, connexion utf8mb3  → même charset, collations différentes, REFUS
+```
+
+La même requête réussissait donc dans phpMyAdmin et échouait dans le script, sur la même base.
+Trois `ALTER TABLE` successifs sur `f_nomenclat` n'y ont rien changé, et ne pouvaient rien y
+changer : la collation fautive n'appartenait à aucune table.
+
+Le correctif passe par une méthode unique, `refExpr()`, qui enveloppe toute référence dans
+`BINARY CAST(… AS CHAR)` — hors de toute collation, et **sans écrire de nom de collation en dur**,
+qui serait faux sur la prochaine installation. Les quatre comparaisons du script y passent :
+filtre source, condition des lignes retenues, décomptes du rapport, exclusion de l'article 14749.
+
+**Ce que `BINARY` change :** la comparaison devient sensible à la casse. Vérifié avant de
+l'adopter — **aucune** référence de `f_article` ni de `f_nomenclat` ne se distingue d'une autre par
+la seule casse. Une comparaison numérique aurait été plus naturelle, mais 22 des 15 909 références
+ne le sont pas.
+
+L'anomalie a été reproduite en développement, message d'erreur à l'identique, sur une base créée
+en `utf8mb3_general_ci` ; le correctif la lève et laisse les résultats inchangés sur les données
+réelles : **181 articles composés, 489 liaisons, 3 / 6 / 12 lignes écartées**.
+
+Voir **P19** dans [ANOMALIES.md](ANOMALIES.md).
+
+
 ## [0.13.1] — 2026-08-16
 
 ### Les factures émises sur des commandes annulées sont supprimables

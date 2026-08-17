@@ -155,6 +155,46 @@ class MigrationProductKit extends AeroMigrationRunner
     }
 
     /**
+     * Référence comparable, indépendante de toute collation.
+     *
+     * ------------------------------------------------------------------------------
+     * SANS `BINARY`, LE SCRIPT ÉCHOUE SUR CERTAINES INSTALLATIONS ET PAS SUR D'AUTRES
+     * ------------------------------------------------------------------------------
+     *
+     * Le script compare deux colonnes de types différents : `AR_Ref` est un `varchar`, mais
+     * `NO_RefDet` est un **entier**. Or `CAST(<entier> AS CHAR)` ne tient pas sa collation d'une
+     * table — il prend celle de la **connexion**. Dès que celle-ci diffère de la collation des
+     * tables tout en partageant leur jeu de caractères, MySQL refuse la comparaison :
+     *
+     *     Illegal mix of collations (utf8mb3_general_ci,IMPLICIT)
+     *                          and (utf8mb3_unicode_ci,IMPLICIT) for operation '='
+     *
+     * C'est exactement le cas de l'instance en ligne : ses tables sont en `utf8mb3_general_ci`
+     * et Dolibarr ouvre sa connexion en `utf8mb3_unicode_ci`.
+     *
+     * **Le piège est que l'anomalie ne se voit pas partout.** En développement, les tables sont
+     * en `utf8mb4` : le jeu de caractères différant de celui de la connexion, MySQL convertit
+     * vers le plus large au lieu de refuser, et tout passe. La même requête jouée dans
+     * phpMyAdmin passe aussi, sa connexion étant en `utf8mb4`. Seul Dolibarr échoue, et
+     * seulement en ligne — de quoi chercher longtemps du côté des données.
+     *
+     * `BINARY` place les deux membres hors de toute collation et clôt la question sans écrire
+     * de nom de collation en dur, qui serait faux sur la prochaine installation.
+     *
+     * **Ce que cela change, et pourquoi c'est sans effet ici :** la comparaison devient sensible
+     * à la casse. Vérifié avant de l'adopter — aucune référence de `f_article` ni de
+     * `f_nomenclat` ne se distingue d'une autre par la seule casse. Une comparaison numérique
+     * aurait été plus naturelle, mais 22 des 15 909 références ne sont pas numériques.
+     *
+     * @param  string $column Colonne ou expression portant une référence article
+     * @return string         Expression SQL comparable
+     */
+    protected function refExpr($column)
+    {
+        return 'BINARY CAST('.$column.' AS CHAR)';
+    }
+
+    /**
      * Condition SQL désignant les lignes de composition retenues.
      *
      * Écrite une fois et réutilisée par le filtre source, par le chargement et par le
@@ -165,9 +205,9 @@ class MigrationProductKit extends AeroMigrationRunner
      */
     protected function keptLinesCondition()
     {
-        $sql  = " CAST(AR_Ref AS CHAR) <> CAST(NO_RefDet AS CHAR)";
+        $sql  = ' '.$this->refExpr('AR_Ref').' <> '.$this->refExpr('NO_RefDet');
         $sql .= " AND TRIM(COALESCE(statut, '')) <> 'S'";
-        $sql .= " AND CAST(AR_Ref AS CHAR) <> '".$this->db->escape(self::EXCLUDED_REF)."'";
+        $sql .= ' AND '.$this->refExpr('AR_Ref')." <> '".$this->db->escape(self::EXCLUDED_REF)."'";
 
         return $sql;
     }
@@ -175,12 +215,16 @@ class MigrationProductKit extends AeroMigrationRunner
     /**
      * Filtre source : les seuls articles réellement composés.
      *
+     * Les deux membres du `IN` passent par refExpr() : sans quoi `f_article.AR_Ref`, qui porte la
+     * collation de sa table, affronterait une sous-requête déjà neutralisée.
+     *
      * @return string
      */
     protected function getSourceWhere()
     {
         $sql  = "TRIM(AR_Ref) <> ''";
-        $sql .= ' AND AR_Ref IN (SELECT CAST(AR_Ref AS CHAR) FROM '.$this->src('f_nomenclat');
+        $sql .= ' AND '.$this->refExpr('AR_Ref').' IN (SELECT '.$this->refExpr('AR_Ref');
+        $sql .= ' FROM '.$this->src('f_nomenclat');
         $sql .= ' WHERE'.$this->keptLinesCondition().')';
 
         return $sql;
@@ -319,10 +363,11 @@ class MigrationProductKit extends AeroMigrationRunner
     protected function countDiscardedLines()
     {
         $motifs = array(
-            'lignes où l\'article se contient lui-même' => 'CAST(AR_Ref AS CHAR) = CAST(NO_RefDet AS CHAR)',
+            'lignes où l\'article se contient lui-même'
+                => $this->refExpr('AR_Ref').' = '.$this->refExpr('NO_RefDet'),
             'lignes de composition en sommeil'          => "TRIM(COALESCE(statut, '')) = 'S'",
             'lignes de l\'article '.self::EXCLUDED_REF.', mis de côté'
-                => "CAST(AR_Ref AS CHAR) = '".$this->db->escape(self::EXCLUDED_REF)."'",
+                => $this->refExpr('AR_Ref')." = '".$this->db->escape(self::EXCLUDED_REF)."'",
         );
 
         foreach ($motifs as $libelle => $condition) {
