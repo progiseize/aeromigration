@@ -6,6 +6,32 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.17.0] — 2026-08-19
+
+### Ajouté — `renumber_invoices.php` : la numérotation définitive du parc
+
+Règle client : **coupure au 1er octobre 2023** (début de l'exercice 2023-2024, les exercices
+allant d'octobre à septembre). Avant, chaque facture reprend son numéro d'émission d'origine —
+`FA<millésime>-<chiffres du numéro ADD>`, partie chiffrée telle quelle (FAC216762 →
+FA1516-216762), avoirs en `AV<millésime>-`. Après, séquence chronologique à 000001 par exercice
+et par série, toutes provenances confondues, compteur à six chiffres — celui que
+`mod_facture_aero` continue au quotidien.
+
+Le script refuse de tourner si des documents de factures subsistent (répertoires,
+`llx_ecm_files`, `last_main_doc`) : décision du 19/08/2026, les PDF des instances de test —
+jamais transmis qu'à la boutique de test — ont tous été supprimés, et se régénèrent à la
+demande APRÈS renumérotation, avec le numéro définitif. La référence est réécrite par UPDATE
+direct, exception assumée : le cœur n'offre aucune API pour renommer une facture validée, et
+`uk_facture_ref` protège l'opération.
+
+Les cibles sont calculées de données stables (numéro source, date, type) : déterministe et
+rejouable, contrôle d'unicité totale avant toute écriture, `--limit` pour un lot d'essai. Une
+**pré-phase** déplace en temporaire les références actuelles qui occupent déjà une cible — les
+avoirs récents portent le format définitif (`AV2526-000094`) dès leur création par
+`mod_facture_aero`, et l'ordre des renommages passerait sinon par des états intermédiaires en
+collision (18 avoirs l'ont prouvé au premier passage). Exécuté en local le 19/08 : 183 457
+renommées, 19 séries de FA1516 à AV2526, zéro doublon, zéro reste.
+
 ## [0.16.3] — 2026-08-19
 
 ### Retiré — les catégories de familles (ADD V20, V5, DIVERS, AREAFFECTER)

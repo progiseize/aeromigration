@@ -139,8 +139,15 @@ consulté que par les scripts de contrôle.
 
 Chantier distinct, à jouer **après** les étapes ci-dessus (le parc doit être définitif avant
 de renuméroter) : coupure au 01/10/2023, numéros ADD conservés avant, séquence par exercice
-fiscal après, répertoires de documents et `llx_ecm_files` renommés. Voir le dossier de
-conception ; la question restante est le sort des PDF (renommer ou régénérer).
+fiscal après.
+
+**La question des PDF est tranchée (19/08/2026)** : sur les instances de test, aucun document
+n'a de valeur — les PDF « transmis » ne l'ont été qu'à la boutique de test. Tout a été
+supprimé (répertoires, `llx_ecm_files`, `last_main_doc`), et la renumérotation n'a donc
+**aucun renommage de fichiers à gérer** : elle travaille sur un parc sans documents, avec un
+garde-fou qui le vérifie. Les PDF se régénèrent **à la demande, après** renumérotation — au
+premier clic, avec le numéro définitif. Au jour J, même principe : renuméroter avant toute
+émission de document, jamais l'inverse.
 
 ## Contrôles de fin de mise en production
 
