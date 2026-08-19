@@ -6,6 +6,29 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.16.0] — 2026-08-19
+
+### Ajouté — `relink_prestasync.php` : les liaisons boutique survivent à une reprise sur base neuve
+
+Prestasync tient ses correspondances par rowid Dolibarr (`llx_prestasync_customer.fk_soc_doli`,
+`llx_prestasync_supplier.fk_soc`) : sur une base neuve, elles sont toutes caduques, et sans elles
+il recrée un tiers à chaque commande — les **317 fournisseurs de l'instance de test ont tous été
+dédoublés** ainsi, faute de précaution au premier rejeu.
+
+Les liaisons de l'instance actuelle sont exportées en **clés stables** — le code tiers ADD, que la
+reprise repose dans `ref_ext` (`SAGE:<CT_Num>`) : `data/liaison_presta_tiers_*.csv` (155 673
+clients, couverture totale moins 2 nés-boutique repris par e-mail — jamais par le code client,
+généré par Dolibarr à l'import donc différent d'une base à l'autre) et
+`data/liaison_presta_fournisseurs_*.csv` (317, dont 292 rattachés au jumeau ADD par le nom —
+les liens de test pointaient vers les doublons nés de la boutique). Le script résout chaque clé
+vers le rowid de la base courante et repeuple les deux tables de liaison. Simulation par défaut,
+`--confirm`, rejouable (les liaisons en place sont ignorées) ; l'écriture directe dans les tables
+`llx_prestasync_*` est assumée — elles appartiennent au module de liaison, qui n'offre aucune API.
+
+S'exécute après `migrate.php thirdparty` et **avant tout démarrage de Prestasync** — étape 6 de
+MISE_EN_PRODUCTION.md. Les adresses de livraison ne sont pas rattachées : nées de la boutique,
+sans clé stable, Prestasync les recrée à la demande.
+
 ## [0.15.0] — 2026-08-18
 
 ### Ajouté — `align_invoices_add.php` : la règle « ADD fait foi » appliquée au parc de factures

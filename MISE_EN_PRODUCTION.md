@@ -41,6 +41,10 @@ Dans l'ordre inverse, rien de tout cela n'existe. Deux réserves :
   constante `AEROMIG_SOURCE_DB` en conséquence (ou `--source-db=` sur chaque script, vide pour
   « la base de Dolibarr »), et `--database=`/`--model=` pour l'import CSV. `--only=` évite d'y
   installer les 347 tables : seules celles que les scripts lisent sont utiles.
+- **Les fichiers de liaison boutique** (`data/liaison_presta_tiers_*.csv` et
+  `liaison_presta_fournisseurs_*.csv`) régénérés depuis la **dernière photo** de l'instance
+  précédente — ils portent la correspondance id PrestaShop ↔ code tiers ADD que l'étape 6
+  rejouera sur la base neuve.
 
 ## L'ordre des opérations
 
@@ -94,18 +98,38 @@ doivent être à **zéro** — c'est le témoin que l'ordre a été respecté. L
 ventes de 2026 sans facture ADD : à rapprocher de la liste arbitrée avec le client (au 18/08 :
 3 expédiées dont 2 716,42 € de créances aéroclubs, 5 commandes en attente).
 
-### 6. Rattrapage Prestasync borné à la bascule
+### 6. Rétablir les liaisons boutique — AVANT tout démarrage de Prestasync
+
+Prestasync tient ses correspondances par **rowid Dolibarr** : sur la base neuve, elles sont
+toutes caduques. Sans elles, il ne reconnaît personne et **recrée un tiers à chaque commande**
+— c'est ce qui a dédoublé les 317 fournisseurs de l'instance de test.
+
+```
+php scripts/relink_prestasync.php            # simulation
+php scripts/relink_prestasync.php --confirm
+```
+
+Le script lit les fichiers `data/liaison_presta_*.csv` (id PrestaShop ↔ code tiers ADD,
+exportés depuis l'instance précédente — **à régénérer depuis la dernière photo avant le
+jour J**) et repeuple `llx_prestasync_customer` et `llx_prestasync_supplier` en résolvant
+chaque code vers le `ref_ext` posé par la reprise. Attendu au 19/08 : ~155 673 clients et
+~292 fournisseurs rattachés ; les fournisseurs nés dans la boutique (25) et les ambigus (4)
+sont listés au rapport — Prestasync les recréera, ou ils se traitent à la main. Les adresses
+de livraison (`llx_prestasync_address`) ne sont pas rattachées : nées de la boutique, sans
+clé stable, Prestasync les recrée à la demande sans dégât.
+
+### 7. Rattrapage Prestasync borné à la bascule
 
 Rattraper commandes et factures boutique **à partir de juin 2026 seulement** (borne exacte à
 fixer avec l'associé au vu de la date de bascule effective du flux web, mesurée au 11/06/2026
 sur les données). Jamais de rattrapage intégral.
 
-### 7. Rouvrir le flux vivant
+### 8. Rouvrir le flux vivant
 
 Réactiver Prestasync. À partir de là, la boutique fait foi sur le neuf ; ADD n'est plus
 consulté que par les scripts de contrôle.
 
-### 8. Renumérotation des factures
+### 9. Renumérotation des factures
 
 Chantier distinct, à jouer **après** les étapes ci-dessus (le parc doit être définitif avant
 de renuméroter) : coupure au 01/10/2023, numéros ADD conservés avant, séquence par exercice

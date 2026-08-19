@@ -465,6 +465,7 @@ aeromigration/
     ├── purge.php                défait ce qu'une reprise a produit
     ├── import_add_csv.php       charge l'export de l'éditeur
     ├── align_invoices_add.php   applique la règle « ADD fait foi » au parc de factures
+    ├── relink_prestasync.php    rétablit les liaisons boutique après reprise sur base neuve
     ├── sync_kit_tracking.php    aligne les produits composés sur leurs composants
     ├── fix_invoice_signs.php    correctif ponctuel, voir ci-dessous
     └── delete_invoices_cancelled_orders.php   remplacé par align_invoices_add.php
