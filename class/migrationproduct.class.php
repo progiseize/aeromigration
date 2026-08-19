@@ -573,6 +573,30 @@ class MigrationProduct extends AeroMigrationRunner
                 return ($current === $wanted) ? 'skipped' : 'updated';
             }
 
+            if (!empty($this->onlyFields) && $this->onlyFields === array('status')) {
+                $avail = isset($this->addAvailabilityMap[(int) $row->disponibilite_origine])
+                    ? $this->addAvailabilityMap[(int) $row->disponibilite_origine]
+                    : 0;
+                $track = ((int) $row->suivi_origine >= 1 && (int) $row->suivi_origine <= 3)
+                    ? (int) $row->suivi_origine
+                    : 0;
+
+                if ($avail <= 0 || $track <= 0) {
+                    $this->statusUnqualified++;
+                    return 'skipped';
+                }
+
+                $current = $this->currentCouple($existingId);
+                $trackMatters = !$this->isKitParent($existingId);
+                if ($current[0] === $avail && (!$trackMatters || $current[1] === $track)) {
+                    $this->statusAlreadyOk++;
+                    return 'skipped';
+                }
+
+                $this->statusAligned++;
+                return 'updated';
+            }
+
             return 'updated';
         }
 
@@ -689,6 +713,10 @@ class MigrationProduct extends AeroMigrationRunner
 
             if ($this->writes('datec')) {
                 $touched = $this->applySourceCreationDate($product, $row, $currentDate) || $touched;
+            }
+
+            if ($this->writes('status')) {
+                $touched = $this->applyAddStatus($product, $row) || $touched;
             }
 
             // En réécriture ciblée, un produit dont la valeur était déjà juste n'a rien reçu :
@@ -885,6 +913,7 @@ class MigrationProduct extends AeroMigrationRunner
      *   fields    les champs de la fiche article, via mapFields() puis update()
      *   category  le rattachement aux catégories
      *   datec     la date de création, reprise de AR_DateCreation
+     *   status    le couple disponibilité/suivi, depuis les champs numériques d'ADD
      *
      * `datec` est le cas qui a motivé l'option : `Product::update()` n'écrit jamais `datec`,
      * seul `setValueFrom()` le peut. Rejouer tout le mapping de 15 909 articles pour poser une
@@ -894,7 +923,136 @@ class MigrationProduct extends AeroMigrationRunner
      */
     public function supportedOnlyFields()
     {
-        return array('fields', 'category', 'datec');
+        return array('fields', 'category', 'datec', 'status');
+    }
+
+    /**
+     * Correspondance des identifiants de disponibilité ADD vers le dictionnaire aerotoolbox.
+     *
+     * Vérifiée par croisement le 19/08/2026 : les ids 1 à 7 coïncident (2 731 produits sur le
+     * seul id 6), et l'id 8 d'ADD — « En cours de référencement » — correspond à notre 10,
+     * « Prestation » (8) et « Produit composant uniquement » (9) ayant été insérés avant chez
+     * nous. Le suivi (1 à 3) coïncide sans translation.
+     *
+     * @var array<int,int>
+     */
+    protected $addAvailabilityMap = array(1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6, 7 => 7, 8 => 10);
+
+    /** @var int Couples alignés sur les champs numériques d'ADD */
+    protected $statusAligned = 0;
+
+    /** @var int Couples déjà conformes */
+    protected $statusAlreadyOk = 0;
+
+    /** @var int Articles que la surcouche ADD n'a jamais qualifiés (champs à zéro) : non touchés */
+    protected $statusUnqualified = 0;
+
+    /**
+     * Aligne le couple disponibilité/suivi sur les champs numériques d'ADD.
+     *
+     * **La source fait foi** (décision client du 19/08/2026) : `disponibilite_origine` et
+     * `suivi_origine` — l'origine brute, pas l'état de rupture — remplacent le couple Dolibarr.
+     * Les articles que la surcouche n'a jamais qualifiés (champs à zéro, vérifiés vides à
+     * l'écran ADD sur dix sondages) ne sont PAS touchés : le client les qualifie dans ADD
+     * (export `rapports/ARTICLES_A_QUALIFIER_ADD_*.csv`), et un passage suivant les reflétera.
+     *
+     * L'écriture passe par `aerotb_status_write()`, l'unique porte d'aerotoolbox : elle impose
+     * le suivi dérivé sur les produits composés, et aligne « En vente / En achat » sur la
+     * combinaison. Pas de poussée boutique ni de cascade : le passage parcourt déjà tout le
+     * catalogue, la réconciliation d'aeropresta rattrapera la boutique.
+     *
+     * @param  Product  $product Produit chargé
+     * @param  stdClass $row     Ligne source
+     * @return bool              Vrai si le couple a été écrit
+     * @throws Exception         Si la porte d'écriture échoue
+     */
+    protected function applyAddStatus(Product $product, $row)
+    {
+        $avail = isset($this->addAvailabilityMap[(int) $row->disponibilite_origine])
+            ? $this->addAvailabilityMap[(int) $row->disponibilite_origine]
+            : 0;
+        $track = ((int) $row->suivi_origine >= 1 && (int) $row->suivi_origine <= 3)
+            ? (int) $row->suivi_origine
+            : 0;
+
+        if ($avail <= 0 || $track <= 0) {
+            $this->statusUnqualified++;
+            return false;
+        }
+
+        $current = $this->currentCouple((int) $product->id);
+        // Sur un lot, le suivi ne se compare pas : la porte d'écriture le remplace par celui
+        // des composants (règle aerotoolbox 1.13.0), ADD est volontairement ignoré. Sans cette
+        // exception, neuf lots s'annonceraient « à aligner » à chaque passage sans jamais converger.
+        $trackMatters = !$this->isKitParent((int) $product->id);
+        if ($current[0] === $avail && (!$trackMatters || $current[1] === $track)) {
+            $this->statusAlreadyOk++;
+            return false;
+        }
+
+        if (!function_exists('aerotb_status_write')) {
+            dol_include_once('/aerotoolbox/lib/aerotoolbox.lib.php');
+        }
+        if (!function_exists('aerotb_status_write')) {
+            throw new Exception('aerotoolbox est requis : aerotb_status_write() introuvable');
+        }
+
+        $pushInfo = null;
+        if (aerotb_status_write($this->db, (int) $product->id, $avail, $track, $this->user, false, $pushInfo, false) < 0) {
+            throw new Exception('Écriture du couple refusée sur '.$product->ref);
+        }
+
+        $this->statusAligned++;
+
+        return true;
+    }
+
+    /** @var array<int,bool>|null Produits composés (pères d'une association), chargés au premier besoin */
+    protected $kitParents = null;
+
+    /**
+     * Le produit est-il un lot (père d'une composition) ?
+     *
+     * @param  int $productId Produit
+     * @return bool
+     */
+    protected function isKitParent($productId)
+    {
+        if ($this->kitParents === null) {
+            $this->kitParents = array();
+            $resql = $this->db->query('SELECT DISTINCT fk_product_pere FROM '.MAIN_DB_PREFIX.'product_association');
+            while ($resql && ($obj = $this->db->fetch_object($resql))) {
+                $this->kitParents[(int) $obj->fk_product_pere] = true;
+            }
+            if ($resql) {
+                $this->db->free($resql);
+            }
+        }
+
+        return isset($this->kitParents[(int) $productId]);
+    }
+
+    /**
+     * Couple disponibilité/suivi actuellement en base pour un produit.
+     *
+     * Lu en SQL : la simulation de `--only=status` ne charge pas l'objet, et au passage réel
+     * l'objet vient d'être chargé mais ses extrafields peuvent avoir bougé pendant le lot.
+     *
+     * @param  int $productId Produit
+     * @return array{0:int,1:int} array(disponibilité, suivi)
+     */
+    protected function currentCouple($productId)
+    {
+        $sql = 'SELECT aerotb_availability, aerotb_tracking FROM '.MAIN_DB_PREFIX.'product_extrafields'
+            .' WHERE fk_object = '.((int) $productId);
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            return array(0, 0);
+        }
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+
+        return $obj ? array((int) $obj->aerotb_availability, (int) $obj->aerotb_tracking) : array(0, 0);
     }
 
     /**
@@ -1344,6 +1502,26 @@ class MigrationProduct extends AeroMigrationRunner
             if ($this->creationDateMissing > 0) {
                 $lines[] = '  '.str_pad((string) $this->creationDateMissing, 6, ' ', STR_PAD_LEFT)
                     .'  article(s) sans date dans la source : date de reprise conservée';
+            }
+        }
+
+        if ($this->statusAligned > 0 || $this->statusAlreadyOk > 0 || $this->statusUnqualified > 0) {
+            if ($lines) {
+                $lines[] = '';
+            }
+            $lines[] = 'Couple disponibilité/suivi (champs numériques ADD)';
+            if ($this->statusAligned > 0) {
+                $lines[] = '  '.str_pad((string) $this->statusAligned, 6, ' ', STR_PAD_LEFT)
+                    .'  couple(s) aligné(s) sur ADD — « En vente / En achat » suivent la combinaison';
+            }
+            if ($this->statusAlreadyOk > 0) {
+                $lines[] = '  '.str_pad((string) $this->statusAlreadyOk, 6, ' ', STR_PAD_LEFT)
+                    .'  déjà conforme(s)';
+            }
+            if ($this->statusUnqualified > 0) {
+                $lines[] = '  '.str_pad((string) $this->statusUnqualified, 6, ' ', STR_PAD_LEFT)
+                    .'  jamais qualifié(s) par la surcouche ADD : non touché(s), à qualifier dans ADD'
+                    .' (rapports/ARTICLES_A_QUALIFIER_ADD_*.csv)';
             }
         }
 

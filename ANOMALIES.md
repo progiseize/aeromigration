@@ -1114,18 +1114,26 @@ montants de la veille l'avait pourtant montré (« 62 407 écarts FAC, cumul 6,8
 été mal lu — la colonne `DL_MontantTTC` passait pour non comparable sur cette ère, alors que
 c'est Dolibarr qui était à zéro.
 
-Correctif en 0.16.1 (`lineUnitPriceHt()`) : quand le HT est NULL, le prix est reconstruit —
-`PUTTC / (1 + taxe/100)` — et retombe sur `DL_MontantHT` au centime sur les lignes
-vérifiables. **Seul le NULL déclenche le repli** : un HT réellement à zéro (ligne offerte,
-texte) reste à zéro. Réparation de l'existant par `scripts/fix_invoice_zero_amounts.php`
-(suppression des zéros à signature « PU NULL + PUTTC rempli », puis rejeu de la reprise).
+Correctif en 0.16.1, affiné en 0.16.2 : quand le HT est NULL, **le montant de ligne fait
+foi** — `DL_MontantHT` (remise reconstituée pour que Dolibarr y retombe), à défaut
+`DL_MontantTTC` détaxé, et une ligne sans aucun montant vaut zéro, jamais de repli sur le
+`PUTTC` (il refacturerait les doublons d'export). La première
+reconstruction (PUTTC seul) était fausse sur 783 pièces (891 k€) : des **remises de 100 %**
+dont le prix ne vit que dans le montant (PUTTC à zéro), et des **lignes dupliquées par
+l'export, montants à NULL** — une ligne sans aucun montant vaut zéro, c'est un doublon.
+**Seul le NULL du PU déclenche le repli** : un HT réellement à zéro (ligne offerte, texte)
+reste à zéro. Réparation de l'existant par `scripts/fix_invoice_zero_amounts.php` (pièces à
+PU NULL en écart avec la somme des montants de ligne, puis rejeu de la reprise — converge).
 
-Deux pièges dans le périmètre de réparation :
+Trois pièges dans le périmètre de réparation :
 - les **ventes magasin réglées par avoir** (`F02…`) sont légitimement à zéro : une ligne
   `#AVOIR` négative, dont le montant ne vit que dans le PU, équilibre la marchandise — la
   somme des `DL_MontantTTC` d'ADD les fait passer pour valorisées ;
 - `ABS(NULL)` élimine la ligne d'un `WHERE` : compter les PU vides exige `COALESCE`, sans
-  quoi le phénomène paraît toucher 3 pièces au lieu de 62 967.
+  quoi le phénomène paraît toucher 3 pièces au lieu de 62 967 ;
+- les doublons d'export à montants NULL comptent pour zéro dans la somme de référence
+  (`SUM(COALESCE(DL_MontantTTC, 0))`), exactement comme dans la reconstruction — c'est ce
+  qui fait converger le périmètre.
 
 ## Pièges Dolibarr rencontrés
 

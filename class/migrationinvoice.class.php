@@ -457,7 +457,8 @@ class MigrationInvoice extends AeroMigrationRunner
      */
     protected function loadDocumentLines()
     {
-        $sql  = 'SELECT DO_Piece, AR_Ref, DL_Design, DL_Qte, DL_PrixUnitaire, DL_PUTTC, DL_Taxe1,';
+        $sql  = 'SELECT DO_Piece, AR_Ref, DL_Design, DL_Qte, DL_PrixUnitaire, DL_PUTTC,';
+        $sql .= ' DL_MontantHT, DL_MontantTTC, DL_Taxe1,';
         $sql .= ' DL_Remise01REM_Valeur, DL_Remise01REM_Type, DL_Ligne, DL_PieceBC';
         $sql .= ' FROM '.$this->src('f_docligne_global');
         $sql .= ' WHERE DO_Domaine = '.self::SRC_DOMAIN;
@@ -678,16 +679,9 @@ class MigrationInvoice extends AeroMigrationRunner
         }
         $total = 0.0;
         foreach ($this->linesByDocument[$piece] as $line) {
-            $amount = (float) $line->DL_Qte * $this->lineUnitPriceHt($line);
-
-            // La remise est TOUJOURS un pourcentage, quel que soit DL_Remise01REM_Type — voir
-            // mapLine() pour la démonstration. Dans les deux sens : la source majore par une
-            // remise négative.
-            $discount = (float) $line->DL_Remise01REM_Valeur;
-            if ($discount != 0) {
-                $amount *= (1 - $discount / 100);
-            }
-            $total += $amount;
+            // lineNetHt() rend le montant net de la ligne, remise comprise — y compris sur
+            // l'ère sans PU HT, où le montant de ligne fait foi.
+            $total += $this->lineNetHt($line);
         }
 
         return $total;
@@ -720,7 +714,7 @@ class MigrationInvoice extends AeroMigrationRunner
         }
 
         foreach ($this->linesByDocument[$piece] as $line) {
-            if ((float) $line->DL_Qte * $this->lineUnitPriceHt($line) > self::ROUNDING) {
+            if ($this->lineNetHt($line) > self::ROUNDING) {
                 return false; // au moins une ligne positive : Dolibarr ne saurait pas la porter
             }
         }
@@ -1001,35 +995,37 @@ class MigrationInvoice extends AeroMigrationRunner
     }
 
     /**
-     * Prix unitaire HT d'une ligne source, reconstruit du TTC quand le HT n'existe pas.
+     * Montant net HT d'une ligne source, remise comprise.
      *
-     * **Toute l'ère Sage native (numéros `FAC`, oct. 2015 → mars 2019) ne porte AUCUN prix
-     * unitaire HT** : `DL_PrixUnitaire` y est NULL sur les 148 114 lignes, seul `DL_PUTTC`
-     * est rempli — 62 716 factures pour 6,79 M€ TTC qui, lues par le HT, se reprenaient
-     * toutes à 0,00 €. Découvert le 19/08/2026 en rattachant les factures aux clients
-     * disparus ; voir ANOMALIES D1.
-     *
-     * La reconstruction est sûre : `DL_Taxe1` n'est jamais NULL sur cette ère (20, 5,5 ou
-     * 0 %), et `PUTTC / (1 + taxe/100) × qté × (1 − remise/100)` retombe sur `DL_MontantHT`
-     * au centime sur les lignes vérifiables.
+     * Sert au signe (détection d'avoir) et au contrôle « toutes lignes à zéro ». Sur l'ère
+     * Sage native sans PU HT (`DL_PrixUnitaire` NULL — voir mapLine() et ANOMALIES D1), le
+     * montant de ligne fait foi : `DL_MontantHT`, à défaut `DL_MontantTTC` détaxé, en dernier
+     * recours le PUTTC ; une ligne sans aucun montant est un doublon d'export et vaut zéro.
      *
      * @param  stdClass $line Ligne source
-     * @return float          Prix unitaire HT
+     * @return float          Montant net HT de la ligne
      */
-    protected function lineUnitPriceHt($line)
+    protected function lineNetHt($line)
     {
-        // Un HT réellement porté — zéro compris (ligne gratuite, texte) — est repris tel
-        // quel : seul le NULL signe l'ère sans prix HT.
         if ($line->DL_PrixUnitaire !== null) {
-            return (float) $line->DL_PrixUnitaire;
+            $amount = (float) $line->DL_Qte * (float) $line->DL_PrixUnitaire;
+            $rem = (float) $line->DL_Remise01REM_Valeur;
+            if ($rem != 0) {
+                $amount *= (1 - $rem / 100);
+            }
+            return $amount;
         }
 
-        $ttc = (float) $line->DL_PUTTC;
-        if (abs($ttc) < 0.000001) {
-            return 0.0;
+        // Ère sans PU HT : le montant de ligne fait foi (voir mapLine pour la démonstration).
+        if ($line->DL_MontantHT !== null) {
+            return (float) $line->DL_MontantHT;
+        }
+        if ($line->DL_MontantTTC !== null) {
+            return ((float) $line->DL_MontantTTC) / (1 + ((float) $line->DL_Taxe1) / 100);
         }
 
-        return $ttc / (1 + ((float) $line->DL_Taxe1) / 100);
+        // Aucun montant : doublon d'export, jamais de repli sur le PUTTC (voir mapLine).
+        return 0.0;
     }
 
     /**
@@ -1080,11 +1076,69 @@ class MigrationInvoice extends AeroMigrationRunner
             $vat = 0;
         }
 
-        $price = $this->lineUnitPriceHt($line);
-        if ($line->DL_PrixUnitaire === null && abs((float) $line->DL_PUTTC) > 0.000001) {
-            $this->ttcDerivedLines++;
-        }
         $discount = (float) $line->DL_Remise01REM_Valeur;
+
+        if ($line->DL_PrixUnitaire !== null) {
+            $price = (float) $line->DL_PrixUnitaire;
+        } else {
+            // ------------------------------------------------------------------------------
+            // ÈRE SANS PRIX UNITAIRE HT : LE MONTANT DE LIGNE FAIT FOI
+            // ------------------------------------------------------------------------------
+            //
+            // Toute l'ère Sage native (FAC, oct. 2015 → mars 2019) a `DL_PrixUnitaire` à NULL.
+            // Première reconstruction essayée : `PUTTC / (1 + taxe)`. Juste sur 62 196 pièces,
+            // fausse sur 783 (891 k€ d'écart cumulé), pour deux raisons vérifiées sur pièces :
+            //   - des remises de 100 % avec PUTTC à 0 mais des MONTANTS remplis (FAC235718 :
+            //     rem=100, PUTTC=0, MontantTTC=899,70) — le prix ne vit que dans le montant ;
+            //   - des lignes DUPLIQUÉES par l'export, montants à NULL — les facturer au PUTTC
+            //     comptait la même ligne deux ou trois fois (FAC217163, FAC217183).
+            //
+            // D'où l'ordre : MontantHT (la remise est reconstituée pour que Dolibarr retombe
+            // dessus), MontantTTC à défaut, et une ligne sans aucun montant vaut zéro — c'est
+            // un doublon d'export. Voir ANOMALIES D1.
+            $this->ttcDerivedLines++;
+            $srcQty = (float) $line->DL_Qte;
+
+            if ($line->DL_MontantHT !== null && $srcQty != 0.0) {
+                if ($discount > 0 && $discount < 100) {
+                    $price = ((float) $line->DL_MontantHT / $srcQty) / (1 - $discount / 100);
+                } else {
+                    // Remise de 100 % ou plus, nulle ou négative : le montant est déjà net,
+                    // la remise ne doit pas se réappliquer.
+                    $price    = (float) $line->DL_MontantHT / $srcQty;
+                    $discount = 0;
+                }
+            } elseif ($line->DL_MontantTTC !== null && $srcQty != 0.0) {
+                $netHt = ((float) $line->DL_MontantTTC) / (1 + ((float) $vat) / 100);
+                if ($discount > 0 && $discount < 100) {
+                    $price = ($netHt / $srcQty) / (1 - $discount / 100);
+                } else {
+                    $price    = $netHt / $srcQty;
+                    $discount = 0;
+                }
+            } elseif ($srcQty == 0.0
+                && ($line->DL_MontantHT !== null || $line->DL_MontantTTC !== null)) {
+                // Quantité à zéro mais montant porté (une pièce au recensement, FAC249002) :
+                // ADD compte ce montant dans son total. Repris en une unité au montant.
+                $netHt = ($line->DL_MontantHT !== null)
+                    ? (float) $line->DL_MontantHT
+                    : ((float) $line->DL_MontantTTC) / (1 + ((float) $vat) / 100);
+                if (abs($netHt) > 0.000001) {
+                    $price    = $netHt;
+                    $discount = 0;
+                    $qty      = $isCreditNote ? -1.0 : 1.0;
+                } else {
+                    $price    = 0.0;
+                    $discount = 0;
+                }
+            } else {
+                // Aucun montant : doublon d'export (la même ligne existe avec ses montants),
+                // JAMAIS de repli sur le PUTTC — il refacturerait le doublon au prix plein,
+                // c'est précisément l'erreur des 777 pièces de la première réparation.
+                $price    = 0.0;
+                $discount = 0;
+            }
+        }
 
         // ------------------------------------------------------------------------------
         // DL_Remise01REM_Type NE DISTINGUE PAS POURCENTAGE ET MONTANT
@@ -1367,7 +1421,7 @@ class MigrationInvoice extends AeroMigrationRunner
         }
         if ($this->ttcDerivedLines > 0) {
             $report[] = $this->ttcDerivedLines.' ligne(s) sans prix HT à la source (ère Sage native) :'
-                .' prix reconstruit du TTC et de la TVA de ligne';
+                .' prix reconstruit des montants de ligne';
         }
         if ($this->missingProductLines > 0) {
             $report[] = $this->missingProductLines.' ligne(s) dont l\'article est introuvable : reprise(s) en texte libre — '

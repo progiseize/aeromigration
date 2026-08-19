@@ -152,13 +152,14 @@ if (!$db->query('SELECT 1 FROM '.src('f_docligne_global').' LIMIT 1', 1)) {
  */
 
 echo "Lecture de la source...\n";
-// Par pièce : la valeur des lignes, et la signature du bug — au moins une ligne dont le
-// prix HT est NULL alors que le TTC est rempli. Sans cette signature, un zéro Dolibarr
-// est légitime : les ventes magasin réglées par avoir portent une ligne « #AVOIR »
-// négative (montant dans le seul PU) qui ramène le net à zéro des deux côtés.
+// Par pièce : la valeur des lignes (somme des DL_MontantTTC — les doublons d'export à
+// montants NULL comptent zéro, comme la reconstruction), et la signature du bug — au moins
+// une ligne à prix HT NULL. Sans cette signature, un écart Dolibarr/ADD n'est pas de notre
+// ressort ici : les ventes magasin réglées par avoir (« #AVOIR », montant dans le seul PU)
+// ou les représentations différentes du port ne sont pas touchées.
 $addValue = array();   // DO_Piece -> array(somme DL_MontantTTC, lignes à PU HT NULL)
-$resql = $db->query('SELECT DO_Piece, SUM(DL_MontantTTC) AS s,'
-    .' SUM(CASE WHEN DL_PrixUnitaire IS NULL AND ABS(COALESCE(DL_PUTTC, 0)) > 0.005 THEN 1 ELSE 0 END) AS nullpu'
+$resql = $db->query('SELECT DO_Piece, SUM(COALESCE(DL_MontantTTC, 0)) AS s,'
+    .' SUM(CASE WHEN DL_PrixUnitaire IS NULL THEN 1 ELSE 0 END) AS nullpu'
     .' FROM '.src('f_docligne_global')
     .' WHERE DO_Type IN (6, 7) GROUP BY DO_Piece');
 if (!$resql) {
@@ -172,10 +173,9 @@ $db->free($resql);
 
 $targets = array();
 $value   = 0.0;
-$resql = $db->query('SELECT rowid, ref, ref_ext, datef, fk_statut FROM '.MAIN_DB_PREFIX.'facture'
+$resql = $db->query('SELECT rowid, ref, ref_ext, datef, fk_statut, total_ttc FROM '.MAIN_DB_PREFIX.'facture'
     .' WHERE entity IN ('.getEntity('facture').')'
     ." AND ref_ext LIKE '".$db->escape(REF_EXT_PREFIX)."%'"
-    .' AND ABS(total_ttc) < '.ZERO
     .' ORDER BY rowid');
 if (!$resql) {
     echo "Erreur SQL : ".$db->lasterror()."\n";
@@ -183,12 +183,18 @@ if (!$resql) {
 }
 while ($obj = $db->fetch_object($resql)) {
     $piece = substr($obj->ref_ext, strlen(REF_EXT_PREFIX));
-    if (!isset($addValue[$piece]) || abs($addValue[$piece][0]) < ZERO || $addValue[$piece][1] === 0) {
-        continue;   // à zéro des deux côtés, sans ligne, ou sans la signature du bug : légitime
+    if (!isset($addValue[$piece]) || $addValue[$piece][1] === 0) {
+        continue;   // pas de ligne à PU HT NULL : hors périmètre
     }
-    $obj->addTtc = $addValue[$piece][0];
+    // L'écart se mesure au signe près : les avoirs sont négatifs côté Dolibarr.
+    $ttc = (float) $obj->total_ttc;
+    $src = $addValue[$piece][0];
+    if (min(abs($ttc - $src), abs($ttc + $src)) <= 0.25) {
+        continue;   // déjà juste
+    }
+    $obj->addTtc = $src;
     $targets[] = $obj;
-    $value += $addValue[$piece][0];
+    $value += $src;
 }
 $db->free($resql);
 

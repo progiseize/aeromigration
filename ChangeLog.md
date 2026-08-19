@@ -6,6 +6,37 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.16.2] — 2026-08-19
+
+### Ajouté — `product --only=status` : le couple disponibilité/suivi aligné sur ADD
+
+**La source fait foi** (décision client du 19/08/2026) : le couple vient des champs numériques
+`disponibilite_origine`/`suivi_origine` de `f_article` — l'origine brute, pas l'état de rupture.
+Les identifiants ADD 1 à 7 coïncident avec le dictionnaire aerotoolbox, l'id 8 d'ADD est notre 10
+(voir ANOMALIES A3). L'écriture passe par `aerotb_status_write()`, l'unique porte : le suivi des
+lots reste dérivé des composants (ADD ignoré sur cette dimension, neuf lots concernés), et
+« En vente / En achat » suivent la combinaison. Les 7 845 articles jamais qualifiés par la
+surcouche (champs à zéro, vérifiés vides à l'écran ADD sur dix sondages) ne sont **pas
+touchés** : le client les qualifie dans ADD (`rapports/ARTICLES_A_QUALIFIER_ADD_*.csv`), et un
+passage suivant les reflète. Premier passage local : 2 990 alignés, 5 073 déjà conformes,
+rejouable à zéro. Au passage, l'énigme des couples « hors grille » est résolue : les 1 410
+produits qui en portent sont tous des « jamais qualifiés » remplis jadis depuis le cliché
+tableur (les deux extrafields posés sans validation du couple) — la qualification dans ADD
+les résorbera, aucune combinaison à créer.
+
+### Corrigé — la reconstruction des prix de l'ère Sage native se fonde sur les montants de ligne
+
+La reconstruction `PUTTC / (1 + taxe)` de la 0.16.1 était juste sur 62 196 pièces et fausse sur
+783 (891 k€ cumulés), pour deux raisons vérifiées sur pièces : des remises de 100 % dont le prix
+ne vit que dans le montant (PUTTC à zéro, `DL_MontantTTC` rempli), et des lignes **dupliquées par
+l'export avec montants à NULL**, facturées deux ou trois fois au PUTTC. Le montant de ligne fait
+désormais foi : `DL_MontantHT` (remise reconstituée), à défaut `DL_MontantTTC` détaxé — et une
+ligne sans aucun montant vaut zéro, c'est un doublon d'export, jamais un repli sur le PUTTC. Cas
+limite traité : une quantité à zéro dont le montant est porté (une pièce) est reprise en une
+unité au montant. Le périmètre de `fix_invoice_zero_amounts.php` passe de « reprises à zéro » à
+« en écart avec la source » sur les pièces à PU HT NULL, et converge : rejoué après réparation
+complète en local (62 658 + 777 + 1 pièces), il rend **zéro**.
+
 ## [0.16.1] — 2026-08-19
 
 ### Corrigé — 62 716 factures de l'ère Sage native reprises à 0,00 € : 6,79 M€ restitués
