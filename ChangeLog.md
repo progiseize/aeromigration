@@ -6,6 +6,52 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.15.0] — 2026-08-18
+
+### Ajouté — `align_invoices_add.php` : la règle « ADD fait foi » appliquée au parc de factures
+
+Le client a posé la règle les 17 et 18 août : **avant 2026, la base ADD fait foi sur tout**. Une
+facture qui n'existe pas dans ADD n'a pas lieu d'être dans Dolibarr ; une facture qui y existe à
+l'état annulé doit exister ici au statut « abandonnée ». À partir de 2026, une vente absente d'ADD
+peut être une commande pas encore honorée : signalée, jamais touchée. Depuis la bascule du flux web
+vers la boutique (juin 2026), ADD ne fait plus foi.
+
+Le script redérive son périmètre **de la base source au moment où il tourne** — jamais de liste
+figée : la base ADD est rafraîchie à volonté depuis l'export CSV, et tout sera rejoué sur la vraie
+production. Trois passes, simulation par défaut, `--confirm` pour écrire :
+
+1. **Suppression** des factures nées dans Dolibarr qu'ADD n'a jamais émises — commande annulée dans
+   ADD, jamais facturée, ou absente d'ADD. Au 18/08 : 40 factures, 7 084,55 € TTC. Les encaissées
+   partent aussi, règlements retirés d'abord — décision client, ces encaissements relèvent du
+   prestataire de paiement. Le script englobe et remplace `delete_invoices_cancelled_orders.php`
+   (les 311), dont il reprend le chemin de suppression : brouillon, référence `(PROVDEL<rowid>)`,
+   `delete()`, répertoire de documents.
+2. **Alignement** des factures reprises encore actives alors que leur pièce ADD est annulée — 45 au
+   18/08 (18 932,31 €), toutes passées par l'adoption. Règlements retirés, statut abandonnée, comme
+   les 666 que le chemin de création avait correctement classées. 40 des 45 ont une facture de
+   remplacement active sur la même commande : leur encaissement comptait double.
+3. **Signalement** des ventes de 2026 sans facture ADD : 3 expédiées jamais facturées (dont
+   2 716,42 € de créances aéroclubs à recouvrer) et 5 commandes en attente.
+
+### Corrigé — deux pièces source se disputaient la même facture adoptée
+
+`loadExistingInvoices()` indexait toutes les factures liées à une commande, **marquées ou non**.
+Une commande portant deux pièces source (facture puis corrective, ou avoir) voyait la seconde
+pièce arracher le marqueur `ref_ext` posé par la première sur la même facture cible ; à chaque
+passage, la pièce dépossédée ré-adoptait — 271 marqueurs rebondissaient ainsi d'un passage à
+l'autre, sans dégât mais sans jamais représenter la seconde pièce. Seules les factures **sans
+marqueur** sont désormais adoptables : la première pièce adopte, les suivantes créent leur
+propre facture, comme la source le raconte. Le rejeu du 18/08 a créé les 271 manquantes
+(dont 189 annulées à la source, nées abandonnées) et le passage suivant rend zéro.
+
+### Corrigé — l'adoption d'une facture annulée dans ADD la laissait active et payée
+
+`adoptInvoice()` ne posait que `ref_ext`, fidèle à « marquée, non retouchée ». Mais une facture
+créée par la boutique puis annulée dans ADD gardait alors son statut et ses règlements — les 45
+de la passe 2 viennent de là (rattrapages Prestasync des 12/06 et 13/08). L'adoption applique
+désormais la même règle que la création : règlements retirés, facture abandonnée. Un règlement
+partagé avec une facture hors périmètre arrête l'alignement et se signale au rapport.
+
 ## [0.14.0] — 2026-08-17
 
 ### Ajouté — `sync_kit_tracking.php` : aligner les produits composés sur leurs composants

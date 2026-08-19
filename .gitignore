@@ -1,0 +1,6 @@
+# Exports ADD et sauvegardes de bases : plusieurs centaines de Mo, régénérables à volonté.
+# Penser à recréer le .htaccess (deny) sur le serveur si des exports y sont déposés.
+data/
+
+# Rapports remis au client : documents de travail, jamais versionnés.
+rapports/

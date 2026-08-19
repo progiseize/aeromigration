@@ -8,6 +8,11 @@
  *
  * ------------------------------------------------------------------------------
  * SCRIPT PONCTUEL — IL SUPPRIME DES FACTURES, LISEZ LE PÉRIMÈTRE AVANT
+ *
+ * REMPLACÉ depuis la 0.15.0 par `align_invoices_add.php`, qui applique la règle
+ * « ADD fait foi » arrêtée par le client le 18/08/2026 — périmètre plus large
+ * (les encaissées partent aussi) et recalculé à chaque exécution. Ce script est
+ * conservé comme trace de la suppression des 311 ; ne plus l'exécuter.
  * ------------------------------------------------------------------------------
  *
  * ## Ce qui s'est passé

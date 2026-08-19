@@ -3,6 +3,10 @@
 Module Dolibarr technique hébergeant les scripts de reprise de données de l'ancien ERP
 (Sage 100) vers Dolibarr.
 
+> **Mise en production** : l'ordre des opérations du jour J — reprise d'abord, Prestasync
+> ensuite, rattrapage borné à la bascule — est figé dans
+> [MISE_EN_PRODUCTION.md](MISE_EN_PRODUCTION.md).
+
 ## Principe
 
 Les scripts **n'écrivent jamais en SQL direct** dans les tables `llx_*`. Ils instancient
@@ -460,9 +464,32 @@ aeromigration/
     ├── migrate.php              lance une reprise
     ├── purge.php                défait ce qu'une reprise a produit
     ├── import_add_csv.php       charge l'export de l'éditeur
+    ├── align_invoices_add.php   applique la règle « ADD fait foi » au parc de factures
+    ├── sync_kit_tracking.php    aligne les produits composés sur leurs composants
     ├── fix_invoice_signs.php    correctif ponctuel, voir ci-dessous
-    └── delete_invoices_cancelled_orders.php   idem
+    └── delete_invoices_cancelled_orders.php   remplacé par align_invoices_add.php
 ```
+
+### La règle « ADD fait foi » : `align_invoices_add.php`
+
+Arrêtée par le client le 18/08/2026 : **avant 2026, la base ADD fait foi sur tout**. Une facture
+absente d'ADD n'a pas lieu d'être dans Dolibarr ; une facture annulée dans ADD doit exister ici au
+statut « abandonnée ». À partir de 2026, une vente absente d'ADD peut être une commande pas encore
+honorée — signalée, jamais touchée. Depuis la bascule du flux web vers la boutique (juin 2026), ADD
+ne fait plus foi.
+
+```
+php align_invoices_add.php                dénombre et détaille, sans rien écrire
+php align_invoices_add.php --confirm      applique
+php align_invoices_add.php --pass=delete  une seule des deux passes (delete | abandon)
+```
+
+Le périmètre est **recalculé de la base source à chaque exécution** — jamais de liste figée : la
+base ADD se rafraîchit à volonté (`import_add_csv.php`), et tout sera rejoué sur la vraie
+production. Trois passes : suppression des factures qu'ADD n'a jamais émises (40 au 18/08,
+7 084,55 €, règlements retirés d'abord), alignement en « abandonnée » des reprises dont la pièce
+ADD est annulée (45, passées par l'adoption avant la 0.15.0), signalement des ventes de 2026
+épargnées par la règle. Rejouable : ce qui est conforme n'est pas retouché.
 
 ### Correctifs ponctuels
 
@@ -495,11 +522,15 @@ dans ADD** — une préparation signifie que la marchandise a bougé. Les 311 fa
 étaient sans paiement, sans préparation et sans contrepartie dans l'ancien ERP ; 25 autres,
 préparées ou encaissées, sont épargnées et laissées à l'arbitrage du client.
 
+**Remplacé depuis la 0.15.0** : le client a tranché l'arbitrage (les « préparations » d'ADD sont
+des documents générés par les actions, tous annulés — pas des expéditions), et
+`align_invoices_add.php` applique désormais la règle complète, encaissées comprises. Ce script est
+conservé comme trace des 311 ; ne plus l'exécuter.
+
 Contrairement à `fix_invoice_signs.php`, il supprime : `is_erasable()` accepte sans condition un
 brouillon dont la référence commence par `(PROV`, ce qui ouvre un chemin que la 0.12.5 croyait
-fermé. Voir **P18** dans [ANOMALIES.md](ANOMALIES.md), et
-[FACTURES_SUR_COMMANDES_ANNULEES.md](FACTURES_SUR_COMMANDES_ANNULEES.md) pour l'état des lieux
-remis au client.
+fermé. Voir **P18** dans [ANOMALIES.md](ANOMALIES.md) ; l'état des lieux remis au client est
+dans `rapports/` (non versionné).
 
 ## Ajouter un script de reprise
 

@@ -145,6 +145,20 @@ les deux formes, accentuées et ASCII.
 
 ### A3. Disponibilité et suivi : se fier aux champs libres
 
+> ⚠️ **Démenti le 18/08/2026 — cette conclusion était fausse, correctif à venir.** La
+> comparaison de deux exports à trois semaines d'écart (31/07 et 18/08) montre que les champs
+> libres sont un **cliché figé** : leurs distributions sont identiques au produit près entre
+> les deux (5 493 DISPONIBLE, 2 801 ARRETEE, 1 853 « Arrêt »… mêmes comptes exacts), alors que
+> le catalogue vit — le double encodage (A2) et les `#N/A` (A5) signaient déjà un import
+> tableur ancien. Le statut vivant est bien dans `disponibilite_origine` / `suivi_origine`
+> (avec `disponibilite_rupture` / `suivi_rupture`), pilotés par la table de couples
+> `z_disponibilite` — le modèle même qu'aerotoolbox a repris. Les ids ADD 1 à 7 sont
+> identiques à nos rowids de dictionnaire (vérifié : 6→6 sur 2 731 produits, 7→7 sur 107…),
+> **ADD 8 = notre 10** (En cours de référencement, Prestation et Composant ayant été insérés
+> avant chez nous). Réserve : 7 846 articles ont ces colonnes à zéro — jamais qualifiés par la
+> surcouche ; leur cas est à trancher avec le client. L'« incohérence » relevée ci-dessous
+> (ARRETEE en 0 ou en 6) était l'écart entre le cliché et le vivant, lu à l'envers.
+
 Les colonnes `disponibilite_origine` et `suivi_origine` semblent prévues pour cet usage,
 mais **ne sont pas cohérentes avec les libellés** : le même `COMMERCIALISATION_ARRETEE`
 y apparaît tantôt en `0` (304 fois), tantôt en `6` (13 fois). Ce sont des champs de travail
@@ -1201,6 +1215,362 @@ protection : le coeur n'en offre aucune.
 traite comme zéro. Un contrôle écrit `p.stock <> (SELECT SUM(reel) …)` ne remonte donc rien,
 la comparaison avec `NULL` étant elle-même `NULL` : il faut un `COALESCE(p.stock, 0)` pour
 que le contrôle ait un sens.
+
+
+### P9. Un niveau de prix non renseigné facture zéro, sans avertissement
+
+C'est le piège le plus coûteux de la série, parce qu'il ne produit **aucune erreur**.
+
+`Product::fetch()` charge les niveaux un par un (product.class.php:3196-3217). Quand un
+niveau n'a aucune ligne dans `llx_product_price`, il pose :
+
+```php
+$this->multiprices[$i] = $result ? $result["price"] : null;
+```
+
+`getSellPrice()` s'en sert **sans repli** (ligne 2469) :
+
+```php
+} elseif (getDolGlobalString('PRODUIT_MULTIPRICES') && !empty($thirdparty_buyer->price_level)) {
+    $pu_ht = $this->multiprices[$thirdparty_buyer->price_level];
+```
+
+Un client rattaché à un niveau vide se voit donc proposer **0,00 €** sur chaque ligne de
+devis, de commande ou de facture. Ni message, ni code de retour négatif : le document est
+valide, simplement gratuit.
+
+Constaté avant la reprise des tarifs : **146 498 clients étaient rattachés au niveau 2, qui
+ne portait que cinq articles**. Toute la boutique aurait facturé zéro.
+
+**Ce qu'on en fait.** `customerprice` écrit les huit niveaux pour tous les articles, sans
+exception. Un article sans dérogation reçoit le prix de sa fiche. C'est ce qui explique le
+volume — 127 000 lignes pour 15 900 articles — et il n'y a pas d'économie possible : le seul
+moyen de ne pas remplir un niveau serait de n'y rattacher aucun client.
+
+
+### P10. `updatePrice()` écrit le prix de base sans regarder le niveau
+
+En multi-prix, `llx_product.price` finit par porter la valeur du **dernier niveau écrit**.
+L'`UPDATE` de `updatePrice()` (product.class.php:2868) ne consulte jamais `$level` — la seule
+condition `$level == 1` de la méthode porte sur l'autogénération, ligne 2784.
+
+Le coeur se contredit lui-même, ce qui rend le défaut incontestable : `getSellPrice()`
+retombe sur `$this->price` pour un tiers sans `price_level` (ligne 2468) et traite donc ce
+champ comme le tarif par défaut. La boucle de saisie de la fiche produit finissant par le
+niveau le plus élevé, **un client sans catégorie se voit appliquer le tarif le plus cher**.
+
+Le module `aerotoolbox` corrige par un trigger `PRODUCT_PRICE_MODIFY` qui réaligne le champ
+sur le niveau 1. `customerprice` s'appuie dessus, mais ne s'en remet pas à lui seul : il
+**écrit les niveaux 2 à 8, puis le niveau 1 en dernier**, de sorte que le prix de base reste
+juste même si le trigger venait à être désactivé. C'est ce champ que Prestasync publie vers
+la boutique.
+
+Une purge suivie d'un rejeu partiel laisse d'ailleurs la trace du défaut : sur l'instance de
+travail, un essai manuel du 6 août avait posé un niveau 8 à zéro sur l'article `#00039`, dont
+le prix de base est resté à 0,00 € pendant six jours.
+
+
+### P11. `llx_product_price.import_key` existe, mais rien ne l'écrit
+
+Même configuration que P7, sur une autre table. La colonne est déclarée — en `varchar(14)` —
+mais `Product::_log_price()` (product.class.php:2332) ne la cite pas dans son `INSERT`.
+`price_label` est bien écrite, mais elle s'affiche à l'écran des prix : en faire un marqueur
+technique polluerait la fiche.
+
+Faute de marqueur, `customerprice` porte son idempotence sur **la comparaison des valeurs**.
+C'est d'ailleurs plus sûr qu'un marqueur : un prix corrigé à la main puis rejoué est remis à
+sa valeur source, là où un marqueur aurait fait sauter la ligne.
+
+
+### P12. `Reception::addline()` retourne un index, pas un code de retour
+
+La méthode se termine par `return $num`, où `$num` est `count($this->lines)` **relevé avant
+l'ajout** (reception.class.php:1038). La première ligne de chaque réception rend donc **0** —
+qui est un succès.
+
+Le réflexe `if ($result <= 0)` est ici un piège parfait : il rejette la première ligne de
+chaque document, et l'objet ne porte aucun message puisqu'il n'y a pas d'erreur. Mesuré :
+**16 réceptions en échec sur les 20 premières**, avec pour seul diagnostic « Erreur inconnue ».
+
+Tester `< 0`. C'est le symétrique de P5, où `0` signalait au contraire un échec silencieux.
+
+
+### P13. `addline()` empile, `addlinefree()` insère — et l'ordre est inverse
+
+Deux méthodes de la même classe, aux contrats opposés :
+
+| | `addline()` | `addlinefree()` |
+|---|---|---|
+| Effet | empile dans `$this->lines` | **insère en base** |
+| Moment | **avant** `create()` | **après** `create()` |
+| Pourquoi | `create()` insère la pile (l. 384-391) | a besoin de `$this->id` |
+| Statut exigé | aucun | brouillon, que `create()` ne pose pas |
+
+Créer d'abord puis empiler — l'ordre naturel — produit des réceptions **validées sans la
+moindre ligne**, et aucune des deux méthodes ne proteste. Constaté : 4 réceptions à zéro ligne,
+statut validé, avant que le contrôle en base ne le révèle.
+
+Une réception qui mêle les deux natures de ligne impose donc de scinder le traitement de part
+et d'autre de `create()`, et de repositionner `$this->status` à `STATUS_DRAFT` entre les deux.
+
+
+### P14. `Reception::addline()` instancie une classe qu'elle n'inclut pas
+
+Ligne 967, elle fait `new CommandeFournisseurDispatch(...)` sans le moindre `require_once`. Le
+coeur compte sur l'écran appelant pour l'avoir chargée. En CLI, personne ne le fait : **erreur
+fatale**, donc hors du bloc `try` et sans rollback — la transaction n'est annulée que par la
+fermeture de la connexion.
+
+Il faut inclure `fourn/class/fournisseur.commande.dispatch.class.php` soi-même. C'est le pendant
+de ce qu'on a rencontré avec `date.lib.php`, que `master.inc.php` ne charge pas.
+
+
+### P15. `llx_reception.ref_ext` existe, mais aucune méthode ne l'écrit
+
+Troisième colonne du même acabit, après P7 et P11. `fetch()` sait pourtant lire par elle
+(reception.class.php:517), mais ni `create()` ni `update()` ne la renseignent. `import_key` ne
+peut pas la remplacer : ses 14 caractères ne suffisent pas à « SAGE:BLF990003143 ».
+
+`CommonObject::setValueFrom()` est la sortie honorable — méthode générique du coeur, appelée
+juste après la création. Le mécanisme d'idempotence du socle fonctionne ensuite sans surcharge.
+
+
+### P16. `STOCK_CALCULATE_ON_RECEPTION_CLOSE` est forcée par le coeur
+
+Elle vaut 1 sans figurer dans `llx_const`, et l'y écrire à 0 ne change rien. Dès que le module
+lots/séries est actif et que `STOCK_CALCULATE_ON_RECEPTION` est vide, `Conf::setValues()` la
+repose à 1 à **chaque chargement** (conf.class.php:963).
+
+Conséquence pour la reprise : la validation d'une réception ne mouvemente rien, mais sa
+**clôture** si. Les 2 848 réceptions reprises doivent donc rester au statut validé. Les clôturer
+en masse depuis l'écran ajouterait 387 502 unités au stock d'ouverture.
+
+Le script le rappelle à chaque passage plutôt que de compter sur la mémoire de qui le lance.
+
+
+### P17. `CommandeFournisseurLigne::fetch()` lit deux colonnes qu'elle ne sélectionne pas
+
+`$obj->subprice_ttc` (l. 198) et `$obj->multicurrency_subprice_ttc` (l. 257) sont absentes de sa
+propre requête. Sans conséquence fonctionnelle — les propriétés restent nulles —, mais deux
+avertissements PHP par ligne lue.
+
+Sur une reprise de 22 849 lignes, cela fait **45 000 messages** qui noient la sortie et la
+ralentissent. Lancer avec `php -d display_errors=0` ; le fichier de log reste exploitable.
+
+### P18. `is_erasable()` a une porte de sortie que son refus le plus visible masque
+
+Le refus connu est le -2 : *« cette facture n'est pas la dernière de sa séquence »*
+(`core/class/commoninvoice.class.php:869`). Sur un parc de 182 000 documents, il rend toute
+suppression ciblée impossible — et c'est ce qui avait été conclu en 0.12.5.
+
+Mais la méthode **retourne 1 avant tout autre contrôle** quand deux conditions sont réunies
+(ligne 827) :
+
+```php
+$tmppart = substr($this->ref, 1, 4);
+if ($this->status == self::STATUS_DRAFT && $tmppart === 'PROV') { return 1; }
+```
+
+Brouillon **et** référence commençant par « PROV » : ni la place dans la séquence, ni l'envoi par
+courriel, ni l'impression POS, ni la ventilation comptable ne sont alors examinés. C'est la porte
+qu'emprunte Dolibarr lui-même pour un brouillon jamais validé.
+
+**Deux détails la rendent utilisable, et l'un des deux est contre-intuitif :**
+
+`setDraft()` ne touche **que** `fk_statut` — la référence y survit. Repasser une facture en
+brouillon ne suffit donc pas : il faut réécrire la référence séparément, par `setValueFrom()`.
+C'est aussi ce qui garantissait, en 0.12.5, qu'une correction en place ne renumérotait rien.
+
+`substr($ref, 1, 4)` commence au deuxième caractère : la référence attendue est `(PROV…`, avec sa
+parenthèse. `PROVDEL123` échouerait là où `(PROVDEL123)` passe.
+
+Le suffixe est utile : trois références `(PROV…)` existent déjà en base — `(PROV103216)`,
+`(PROV53556)`, `(PROV-POS1-0)` —, et `uk_facture_ref` est unique. `(PROVDEL<rowid>)` ne peut
+heurter ni celles-là ni ses propres consœurs.
+
+**Et un piège en sortie :** `delete()` supprime le répertoire de documents d'après
+`$this->ref`, donc d'après la référence **temporaire**. Le dossier d'origine reste orphelin. Il
+faut mémoriser la référence avant, et retirer le répertoire soi-même après — hors transaction, le
+système de fichiers ne participant pas au `rollback`.
+
+Employé par `scripts/delete_invoices_cancelled_orders.php`, qui a supprimé 311 factures sans
+laisser une ligne, un lien ni un règlement orphelin.
+
+### P19. `CAST(<entier> AS CHAR)` prend la collation de la CONNEXION, pas celle d'une table
+
+Le piège le plus coûteux rencontré jusqu'ici, parce qu'il ne se manifeste **que sur certaines
+installations** et qu'il désigne les données alors qu'elles sont innocentes.
+
+Comparer une colonne `varchar` à une colonne entière suppose de convertir la seconde. Mais
+`CAST(<entier> AS CHAR)` n'hérite d'aucune table : sa collation est celle de `collation_connection`.
+Dès que cette collation diffère de celle des tables **tout en partageant leur jeu de caractères**,
+MySQL refuse :
+
+```
+Illegal mix of collations (utf8mb3_general_ci,IMPLICIT)
+                     and (utf8mb3_unicode_ci,IMPLICIT) for operation '='
+```
+
+**Le même SQL réussit ou échoue selon l'environnement, sans qu'aucune donnée ne change :**
+
+| | Tables | Connexion | Résultat |
+|---|---|---|---|
+| Développement | `utf8mb4` | `utf8mb3` | **passe** — charsets différents, MySQL convertit vers le plus large |
+| phpMyAdmin | `utf8mb3_general_ci` | `utf8mb4_unicode_ci` | **passe** — même raison |
+| Dolibarr en ligne | `utf8mb3_general_ci` | `utf8mb3_unicode_ci` | **REFUS** — même charset, collations différentes |
+
+C'est ce troisième cas qui bloquait `productkit` en 0.13.1. La conséquence pratique est
+désorientante : la requête recopiée dans phpMyAdmin **rend le bon résultat**, ce qui donne à croire
+que le script ne l'exécute pas telle quelle. Et trois `ALTER TABLE` successifs sur la table source
+n'y changent rien — la collation fautive n'appartient à aucune table.
+
+**Deux réflexes à retenir :**
+
+Ne pas chercher dans `information_schema.COLUMNS`. Regarder d'abord
+`SHOW VARIABLES LIKE 'collation_connection'`, et la comparer à `TABLE_COLLATION`. Si les deux
+partagent le charset et diffèrent par la collation, la cause est là.
+
+Ne jamais écrire de nom de collation en dur pour s'en sortir : il serait faux sur l'installation
+suivante. `BINARY CAST(… AS CHAR)` place les deux membres hors de toute collation, sans rien
+présumer de l'environnement — au prix d'une comparaison sensible à la casse, à vérifier sur les
+données avant de l'adopter.
+
+Employé par `MigrationProductKit::refExpr()`. Les autres scripts n'y sont pas exposés : ils
+comparent des colonnes de même nature, jamais un entier à une chaîne.
+
+
+## Tarifs clients (`z_tarifparticulier`)
+
+Table applicative de l'ancien ERP, et non une table Sage. 27 591 lignes, 15 077 articles,
+neuf catégories. Quatre de ses colonnes ont été écartées après vérification — savoir
+pourquoi évite de vouloir les rétablir.
+
+### Récapitulatif
+
+| # | Constat | Volume | Décision |
+|---|---|---:|---|
+| T1 | La catégorie 0 n'est pas le prix public | 19 693 lignes | Écartée, `f_article` fait foi |
+| T2 | `coeff` ne reconstitue aucun prix | 1 729 lignes | Ignorée |
+| T3 | `statut` ne corrèle avec rien | 27 591 lignes | Ignorée |
+| T4 | 61 règles par famille sans effet | 61 lignes | Écartées, comptées |
+| T5 | Tarifs d'agence, nominatifs, paliers | 512 lignes | Écartés, comptés |
+| T6 | Jusqu'à seize lignes pour un même couple | 940 couples | Départage documenté |
+| T7 | Remises de −30 % à 100 % | 15 valeurs | Bornées et signalées |
+
+### T1. La catégorie 0 n'est pas le prix public
+
+C'est le contresens qui coûterait le plus cher, parce qu'il est vraisemblable : une catégorie
+« 0 » ressemble à un tarif général, et elle couvre 15 059 articles — presque le catalogue.
+
+Elle coïncide avec `f_article.AR_PrixVen` sur **15 149 des 15 885 articles comparables**. Ce
+sont les 736 écarts qui tranchent : **735 fois, c'est la fiche article qui a été modifiée en
+dernier**.
+
+```
+f_article        : 15 238 lignes modifiées en 2026,    505 en 2025
+z_tarifparticulier
+  catégorie 0    :    570 lignes modifiées en 2026, 14 783 en 2023
+```
+
+La catégorie 0 est une strate figée en 2023 que l'exploitation a cessé d'entretenir.
+
+**Décision.** Le prix de référence est `f_article.AR_PrixVen`, avec `AR_PrixTTC` pour la base
+de saisie. C'est aussi la source de `MigrationProduct` : les deux scripts ne peuvent pas
+diverger.
+
+### T2. `coeff` ne reconstitue aucun prix
+
+Le nom promet un multiplicateur. Vérification sur la catégorie Marché Enac, la seule où il
+varie :
+
+```
+article   78  coeff 3,0159  coût std  2,99  →  9,02   tarif réel  9,50
+article 2502  coeff 2,3174  coût std 11,20  → 25,95   tarif réel 29,95
+article  438  coeff 2,3065  achat    12,00  → 27,68   tarif réel 18,25
+```
+
+Aucune combinaison avec le prix d'achat, le coût standard, la TVA ou le prix de vente ne le
+retrouve. C'est un indicateur de marge, calculé et jamais réutilisé.
+
+Sa distribution achève de le disqualifier : sur 27 591 lignes, **22 217 le laissent à zéro**
+et 3 645 à exactement 1,000000. Seules 1 729 portent une autre valeur, et elles se concentrent
+dans la catégorie 0, écartée par ailleurs.
+
+**Décision.** Ignoré. Sur toutes les lignes concernées, `AR_PrixVen` est renseigné et suffit.
+
+### T3. `statut` ne corrèle avec rien
+
+Trois valeurs : `O` (19 639), `S` (2 581) et vide (5 371). Ni la péremption, ni la promotion,
+ni le prix ne s'y rattachent — les lignes périmées se répartissent entre les trois.
+
+Le filtre naturel, `statut = 'O'`, serait un désastre silencieux : **en catégorie Comptoir,
+3 717 lignes sur 5 217 ont un statut vide**. Il en perdrait 71 %.
+
+**Décision.** Ignoré. Seules les dates de validité départagent, et elles sont nettes :
+3 452 lignes périmées, aucune postdatée.
+
+### T4. Soixante et une règles par famille qui ne font rien
+
+La catégorie FFA porte 61 lignes sans référence article, désignant chacune une famille de
+catalogue. Toutes ont `remise = 0` et `coeff = 1` : elles n'appliquent aucune modification.
+
+Sept règles seulement sont agissantes, en catégories Aéro-Clubs et Marché Enac :
+
+```
+Aéro-Clubs   famille  11   −5 %    1 943 articles
+Marché Enac  famille   7  −20 %       44 articles
+Marché Enac  famille  11   −9 %    1 943 articles
+Marché Enac  famille  27   −9 %    3 651 articles
+Marché Enac  familles 177, 186, 191   −9 %    44 articles
+```
+
+**Décision.** Les règles neutres sont écartées et comptées au rapport, pour que leur absence
+dans le résultat ne passe pas pour un oubli. Un article relevant de plusieurs familles
+remisées reçoit **la remise la plus forte** — un article porte jusqu'à quatre niveaux de
+classification, et retenir la première trouvée ferait dépendre le prix de l'ordre des
+colonnes `CL_No1..4`.
+
+### T5. Trois dimensions sans équivalent en cible
+
+| Motif | Lignes | Pourquoi |
+|---|---:|---|
+| `AG_No1 <> 0` | 509 | Tarif propre à une agence, notion absente de Dolibarr |
+| `CT_Num` renseigné | 2 | Tarif nominatif : relèverait de `llx_product_customer_price` |
+| `AR_aPartirDe > 1` | 1 | Palier de quantité, que le multi-prix ne porte pas |
+
+Les tarifs nominatifs auraient pu justifier d'activer `PRODUIT_CUSTOMER_PRICES`. Deux lignes
+ne le justifient pas.
+
+### T6. Jusqu'à seize lignes en vigueur pour un même couple
+
+940 couples (article, catégorie) ont plusieurs lignes valides simultanément en catégorie 0,
+90 en catégorie Comptoir, et jusqu'à **seize** pour un seul article.
+
+**Départage retenu**, dans cet ordre : le dépôt principal avant le dépôt générique — 52
+articles portent les deux en catégorie Comptoir —, puis la date d'effet la plus récente, puis
+le plus grand `cbMarq`. Le tri est fait par la base, une seule ligne est conservée par couple,
+et le rapport dénombre les écartées.
+
+### T7. Remises de −30 % à 100 %
+
+La catégorie 0 porte quinze valeurs distinctes, dont une remise de **100 %** (deux lignes) et
+une de **−30 %**. Une remise de 100 % donne un prix nul ; une remise négative est une
+majoration.
+
+**Décision.** Les deux sont appliquées telles quelles — la source les a voulues —, mais
+bornées : au-delà de 100 %, le prix est nul, jamais négatif. Les deux cas sont comptés au
+rapport. La catégorie 0 étant écartée (T1), aucun ne subsiste en pratique.
+
+### T8. Les prix remisés sont arrondis au centime
+
+L'ancien ERP ne stocke pas de prix remisé : il garde un taux et l'applique à la vente. Le
+multi-prix, lui, exige une valeur figée. 22,20 € moins 9 % donne 20,202 € — un prix catalogue
+à trois décimales, que la fiche affiche « 20,20 » tout en facturant 20,202.
+
+**Décision.** Le prix issu d'une remise est arrondi au centime, dans sa base de saisie. La
+grille tarifaire étant éditable à l'écran, une valeur non arrondie y serait « corrigée » au
+premier passage, créant une divergence que rien ne signalerait. Les prix fixes, eux, ne sont
+jamais retouchés.
 
 
 ## Tiers (`f_comptet`)

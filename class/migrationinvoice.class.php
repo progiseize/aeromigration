@@ -397,6 +397,14 @@ class MigrationInvoice extends AeroMigrationRunner
         $sql .= ' INNER JOIN '.MAIN_DB_PREFIX.'facture as f ON f.rowid = ee.fk_target';
         $sql .= " WHERE ee.sourcetype = 'commande' AND ee.targettype = 'facture'";
         $sql .= ' AND f.entity IN ('.getEntity('facture').')';
+        // Seules les factures SANS marqueur sont adoptables. Sans ce filtre, une commande
+        // portant deux pièces source (facture puis corrective, ou avoir) voyait la seconde
+        // pièce ARRACHER le marqueur posé par la première sur la même facture cible : à
+        // chaque passage, la pièce dépossédée ré-adoptait — 271 marqueurs rebondissaient
+        // ainsi d'un passage à l'autre, et une des deux pièces n'était jamais représentée.
+        // Filtrées, la première pièce adopte, et les suivantes créent leur propre facture,
+        // comme la source le raconte.
+        $sql .= " AND (f.ref_ext IS NULL OR f.ref_ext NOT LIKE '".$this->db->escape($this->refExtPrefix)."%')";
 
         $resql = $this->db->query($sql);
         if (!$resql) {
@@ -722,7 +730,7 @@ class MigrationInvoice extends AeroMigrationRunner
         // Testé avant toute écriture : c'est ce qui évite 28 313 doublons.
         $orderId = $this->orderIdOf($piece);
         if ($orderId > 0 && isset($this->invoiceByOrder[$orderId])) {
-            return $this->adoptInvoice($this->invoiceByOrder[$orderId], $piece, $orderId);
+            return $this->adoptInvoice($this->invoiceByOrder[$orderId], $piece, $orderId, $row);
         }
 
         $customerCode = $this->indexKey($row->DO_Tiers);
@@ -788,20 +796,30 @@ class MigrationInvoice extends AeroMigrationRunner
     }
 
     /**
-     * Marque une facture existante comme reprise, sans y toucher par ailleurs.
+     * Marque une facture existante comme reprise, et l'aligne si la source est annulée.
      *
-     * Seul `ref_ext` est écrit, par une mise à jour directe : passer par Facture::update()
-     * refuserait la modification d'une facture validée, et rien d'autre n'a à changer. C'est une
-     * exception assumée à la règle du module, documentée ici parce qu'elle se justifie : le champ
-     * n'appartient à aucune logique métier, il ne sert qu'à l'idempotence de cette reprise.
+     * Seul `ref_ext` est écrit dans le cas courant, par une mise à jour directe : passer par
+     * Facture::update() refuserait la modification d'une facture validée, et rien d'autre n'a à
+     * changer. C'est une exception assumée à la règle du module, documentée ici parce qu'elle se
+     * justifie : le champ n'appartient à aucune logique métier, il ne sert qu'à l'idempotence de
+     * cette reprise.
      *
-     * @param  int    $invoiceId Facture cible
-     * @param  string $piece     Numéro de la facture source
-     * @param  int    $orderId   Commande d'origine
+     * Une exception à « rien d'autre n'a à changer », découverte sur 45 factures : quand la pièce
+     * source est **annulée dans ADD**, la facture adoptée restait active avec ses règlements de
+     * boutique — alors que le chemin de création classe ces pièces « abandonnée » sans règlement.
+     * 40 des 45 avaient une facture de remplacement active sur la même commande : l'encaissement
+     * comptait double. L'adoption applique donc désormais la même règle que la création : les
+     * règlements sont retirés, la facture est abandonnée. Un règlement partagé avec une facture
+     * hors périmètre arrête l'alignement, qui est signalé au rapport.
+     *
+     * @param  int      $invoiceId Facture cible
+     * @param  string   $piece     Numéro de la facture source
+     * @param  int      $orderId   Commande d'origine
+     * @param  stdClass $row       Ligne source, pour l'état d'annulation
      * @return array{action:string,id:int}
      * @throws Exception
      */
-    protected function adoptInvoice($invoiceId, $piece, $orderId)
+    protected function adoptInvoice($invoiceId, $piece, $orderId, $row)
     {
         $sql  = 'UPDATE '.MAIN_DB_PREFIX.'facture';
         $sql .= " SET ref_ext = '".$this->db->escape($this->buildRefExt($piece))."'";
@@ -815,6 +833,28 @@ class MigrationInvoice extends AeroMigrationRunner
         // la même facture cible, sans quoi la seconde écraserait le marqueur de la première.
         unset($this->invoiceByOrder[$orderId]);
         $this->adopted++;
+
+        if (trim((string) $row->Z_Annule) === self::CANCELLED) {
+            $invoice = new Facture($this->db);
+            if ($invoice->fetch((int) $invoiceId) > 0
+                && in_array((int) $invoice->statut, array(Facture::STATUS_VALIDATED, Facture::STATUS_CLOSED), true)) {
+                // Une facture close n'abandonne pas ses règlements : rouverte d'abord.
+                if ((int) $invoice->statut === Facture::STATUS_CLOSED || !empty($invoice->paye)) {
+                    $invoice->setUnpaid($this->user);
+                    $invoice->fetch((int) $invoiceId);
+                }
+                $strip = array('errors' => array());
+                if ($this->deletePayments($invoice, $strip) < 0) {
+                    foreach ($strip['errors'] as $err) {
+                        $this->addError($piece, $err);
+                    }
+                } elseif ($invoice->setCanceled($this->user, 'abandon', 'Annulée dans ADD') > 0) {
+                    $this->abandoned++;
+                } else {
+                    $this->addError($piece, 'Abandon refusé : '.$this->objectErrors($invoice));
+                }
+            }
+        }
 
         return array('action' => 'updated', 'id' => (int) $invoiceId);
     }
