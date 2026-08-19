@@ -74,9 +74,10 @@ Points d'attention hérités du test :
 - **`pricelevel` et `customerprice` vont ensemble**, et Prestasync doit être suspendu sur
   toute la fenêtre : entre la purge des tarifs et la fin du rejeu, `llx_product.price` vaut
   zéro.
-- Les écartés **attendus** de `invoice` : documents sans aucune ligne (≈ 380) et factures dont
-  le tiers n'existe plus dans `f_comptet` lui-même (≈ 310 — codes supprimés/fusionnés dans
-  ADD ; irrécupérables sans décision « tiers générique », voir la note en fin de document).
+- Les écartés **attendus** de `invoice` : documents sans aucune ligne (≈ 380). Les ≈ 311
+  factures dont le tiers a disparu de `f_comptet` lui-même sont **reprises** depuis la 0.16.1,
+  rattachées au tiers générique « Clients Anonymisés » (décision client du 19/08/2026) —
+  créé automatiquement au premier besoin, code ADD d'origine en note de chaque facture.
 
 ### 4. Aligner les produits composés
 
@@ -144,8 +145,9 @@ conception ; la question restante est le sort des PDF (renommer ou régénérer)
 2. **Réconciliation pièce à pièce** (référence : celle du 18/08 sur le test) :
    - toute facture **active** de Dolibarr a une contrepartie **active** dans ADD — l'écart
      attendu est **zéro** ;
-   - les actives ADD absentes de Dolibarr se réduisent aux deux catégories documentées
-     (sans ligne, tiers disparu de la source) plus les factures boutique post-bascule ;
+   - les actives ADD absentes de Dolibarr se réduisent à la seule catégorie documentée
+     (documents sans aucune ligne, ≈ 380) plus les factures boutique post-bascule — depuis la
+     0.16.1, les tiers disparus ne font plus d'absentes ;
    - aucune facture abandonnée ne porte de règlement.
 3. **Montants** : sur les ères où ADD tient `DL_MontantTTC` (numéros `F`/`FF`/`AF`/`AP`/`RF`),
    la somme des lignes ADD retombe sur le total Dolibarr à l'arrondi près (98,8 à 100 % sur le
@@ -154,9 +156,8 @@ conception ; la question restante est le sort des PDF (renommer ou régénérer)
 
 ## Décisions en attente qui touchent cette procédure
 
-- **Les ≈ 310 factures aux tiers disparus d'ADD** : les reprendre suppose un tiers générique
-  « client inconnu » — décision client à obtenir avant le jour J, sinon elles restent dehors
-  (et la renumérotation ne les verra pas).
+- ~~Les ≈ 310 factures aux tiers disparus d'ADD~~ **Tranché le 19/08/2026** : reprises et
+  rattachées au tiers générique « Clients Anonymisés » (0.16.1) — plus rien à faire au jour J.
 - **Les créances aéroclubs** (2 716,42 € au 18/08) : à recouvrer côté gestion ; leurs factures
   Dolibarr sont conservées et seront renumérotées normalement.
 - **Statuts produits** : la source vivante est `disponibilite_origine`/`suivi_origine` (ids

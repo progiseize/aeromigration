@@ -201,11 +201,29 @@ class MigrationInvoice extends AeroMigrationRunner
     /** @var array<string,bool> Références d'articles introuvables */
     protected $missingProducts = array();
 
-    /** @var int Factures dont le client est introuvable */
+    /**
+     * Le tiers générique des clients disparus de la source.
+     *
+     * 311 factures réelles (2015-2019, 53 460 € TTC) ont perdu leur client dans ADD
+     * lui-même — crash de 2019 et anonymisations. La facture doit être conservée dix ans,
+     * la personne non : décision client du 19/08/2026, elles sont rattachées à un tiers
+     * générique « Clients Anonymisés », créé au premier besoin, le code d'origine gardé
+     * en note privée de chaque facture.
+     */
+    const GENERIC_CUSTOMER_REF  = 'SAGE:CLIENT_ANONYME';
+    const GENERIC_CUSTOMER_NAME = 'Clients Anonymisés';
+
+    /** @var int Tiers générique, résolu ou créé à la première facture orpheline */
+    protected $genericCustomerId = 0;
+
+    /** @var int Factures dont le client est introuvable, rattachées au tiers générique */
     protected $missingCustomers = 0;
 
     /** @var array<string,bool> Codes clients introuvables */
     protected $missingCustomerCodes = array();
+
+    /** @var int Lignes sans prix HT à la source, reconstruites depuis le PU TTC (ère FAC) */
+    protected $ttcDerivedLines = 0;
 
     /** @var int Lignes de texte libre (sans article) */
     protected $freeTextLines = 0;
@@ -439,7 +457,7 @@ class MigrationInvoice extends AeroMigrationRunner
      */
     protected function loadDocumentLines()
     {
-        $sql  = 'SELECT DO_Piece, AR_Ref, DL_Design, DL_Qte, DL_PrixUnitaire, DL_Taxe1,';
+        $sql  = 'SELECT DO_Piece, AR_Ref, DL_Design, DL_Qte, DL_PrixUnitaire, DL_PUTTC, DL_Taxe1,';
         $sql .= ' DL_Remise01REM_Valeur, DL_Remise01REM_Type, DL_Ligne, DL_PieceBC';
         $sql .= ' FROM '.$this->src('f_docligne_global');
         $sql .= ' WHERE DO_Domaine = '.self::SRC_DOMAIN;
@@ -660,7 +678,7 @@ class MigrationInvoice extends AeroMigrationRunner
         }
         $total = 0.0;
         foreach ($this->linesByDocument[$piece] as $line) {
-            $amount = (float) $line->DL_Qte * (float) $line->DL_PrixUnitaire;
+            $amount = (float) $line->DL_Qte * $this->lineUnitPriceHt($line);
 
             // La remise est TOUJOURS un pourcentage, quel que soit DL_Remise01REM_Type — voir
             // mapLine() pour la démonstration. Dans les deux sens : la source majore par une
@@ -702,7 +720,7 @@ class MigrationInvoice extends AeroMigrationRunner
         }
 
         foreach ($this->linesByDocument[$piece] as $line) {
-            if ((float) $line->DL_Qte * (float) $line->DL_PrixUnitaire > self::ROUNDING) {
+            if ((float) $line->DL_Qte * $this->lineUnitPriceHt($line) > self::ROUNDING) {
                 return false; // au moins une ligne positive : Dolibarr ne saurait pas la porter
             }
         }
@@ -733,13 +751,8 @@ class MigrationInvoice extends AeroMigrationRunner
             return $this->adoptInvoice($this->invoiceByOrder[$orderId], $piece, $orderId, $row);
         }
 
-        $customerCode = $this->indexKey($row->DO_Tiers);
-        if (!isset($this->customerBySage[$customerCode])) {
-            $this->missingCustomers++;
-            $this->missingCustomerCodes[$customerCode] = true;
-            return array('action' => 'skipped', 'id' => 0);
-        }
-
+        // Le contrôle des lignes passe AVANT la résolution du client : un document vide est
+        // écarté quoi qu'il arrive, inutile de créer le tiers générique pour lui.
         if (empty($this->linesByDocument[$piece])) {
             // 430 documents dans ce cas. Une facture sans ligne ne porte aucun montant : la créer
             // reviendrait à poser une pièce comptable vide, que personne ne saurait interpréter.
@@ -747,15 +760,29 @@ class MigrationInvoice extends AeroMigrationRunner
             return array('action' => 'skipped', 'id' => 0);
         }
 
+        $customerCode = $this->indexKey($row->DO_Tiers);
+        $genericNote  = '';
+        if (isset($this->customerBySage[$customerCode])) {
+            $socid = (int) $this->customerBySage[$customerCode];
+        } else {
+            // Client disparu d'ADD lui-même (crash de 2019, anonymisation) : la facture est
+            // réelle et se conserve — rattachée au tiers générique, code d'origine en note.
+            $socid = $this->genericCustomerId();
+            $this->missingCustomers++;
+            $this->missingCustomerCodes[$customerCode] = true;
+            $genericNote = "\nClient ADD « ".trim((string) $row->DO_Tiers)." » disparu de la source :"
+                ." rattachée au tiers générique « ".self::GENERIC_CUSTOMER_NAME." ».";
+        }
+
         $isCreditNote = $this->isCreditNote($piece);
 
         $invoice = new Facture($this->db);
-        $invoice->socid        = (int) $this->customerBySage[$customerCode];
+        $invoice->socid        = $socid;
         $invoice->date         = $this->db->jdate($row->DO_Date);
         $invoice->type         = $isCreditNote ? Facture::TYPE_CREDIT_NOTE : Facture::TYPE_STANDARD;
         $invoice->ref_ext      = $this->buildRefExt($piece);
         $invoice->ref_client   = trim((string) $row->DO_Ref);
-        $invoice->note_private = 'Facture reprise de l\'ancien ERP — '.$piece;
+        $invoice->note_private = 'Facture reprise de l\'ancien ERP — '.$piece.$genericNote;
 
         // Rattachement à la commande : posé avant create(), qui enregistre alors le lien d'origine
         // dans llx_element_element — le même que celui de Prestasync.
@@ -860,6 +887,53 @@ class MigrationInvoice extends AeroMigrationRunner
     }
 
     /**
+     * Retourne le tiers générique des clients disparus, en le créant au premier besoin.
+     *
+     * Le `ref_ext` porte l'idempotence, comme pour tout ce que la reprise crée : rejoué, le
+     * script retrouve le même tiers ; purgé, il repart avec les autres tiers de reprise.
+     * La création passe par Societe::create(), jamais par SQL direct — règle du module.
+     *
+     * @return int Identifiant du tiers
+     * @throws Exception Si la création échoue
+     */
+    protected function genericCustomerId()
+    {
+        if ($this->genericCustomerId > 0) {
+            return $this->genericCustomerId;
+        }
+
+        $sql  = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'societe';
+        $sql .= " WHERE ref_ext = '".$this->db->escape(self::GENERIC_CUSTOMER_REF)."'";
+        $sql .= ' AND entity IN ('.getEntity('societe').')';
+        $resql = $this->db->query($sql);
+        if ($resql && ($obj = $this->db->fetch_object($resql))) {
+            $this->genericCustomerId = (int) $obj->rowid;
+            $this->db->free($resql);
+            return $this->genericCustomerId;
+        }
+
+        $soc = new Societe($this->db);
+        $soc->name         = self::GENERIC_CUSTOMER_NAME;
+        $soc->client       = 1;
+        $soc->code_client  = -1;   // numérotation automatique
+        $soc->country_id   = 1;    // France
+        $soc->ref_ext      = self::GENERIC_CUSTOMER_REF;
+        $soc->note_private = 'Tiers générique de la reprise : porte les factures dont le client'
+            .' a disparu de la source ADD (sinistre de 2019, anonymisations).'
+            .' Décision client du 19/08/2026. Le code client ADD d\'origine est conservé'
+            .' dans la note privée de chaque facture.';
+
+        if ($soc->create($this->user) <= 0) {
+            throw new Exception('Création du tiers générique « '.self::GENERIC_CUSTOMER_NAME.' » refusée : '
+                .$this->objectErrors($soc));
+        }
+
+        $this->genericCustomerId = (int) $soc->id;
+
+        return $this->genericCustomerId;
+    }
+
+    /**
      * Ajoute les lignes d'un document à la facture.
      *
      * Le recalcul des totaux est reporté à la fin : addline() le déclenche à chaque appel, ce qui
@@ -927,6 +1001,38 @@ class MigrationInvoice extends AeroMigrationRunner
     }
 
     /**
+     * Prix unitaire HT d'une ligne source, reconstruit du TTC quand le HT n'existe pas.
+     *
+     * **Toute l'ère Sage native (numéros `FAC`, oct. 2015 → mars 2019) ne porte AUCUN prix
+     * unitaire HT** : `DL_PrixUnitaire` y est NULL sur les 148 114 lignes, seul `DL_PUTTC`
+     * est rempli — 62 716 factures pour 6,79 M€ TTC qui, lues par le HT, se reprenaient
+     * toutes à 0,00 €. Découvert le 19/08/2026 en rattachant les factures aux clients
+     * disparus ; voir ANOMALIES D1.
+     *
+     * La reconstruction est sûre : `DL_Taxe1` n'est jamais NULL sur cette ère (20, 5,5 ou
+     * 0 %), et `PUTTC / (1 + taxe/100) × qté × (1 − remise/100)` retombe sur `DL_MontantHT`
+     * au centime sur les lignes vérifiables.
+     *
+     * @param  stdClass $line Ligne source
+     * @return float          Prix unitaire HT
+     */
+    protected function lineUnitPriceHt($line)
+    {
+        // Un HT réellement porté — zéro compris (ligne gratuite, texte) — est repris tel
+        // quel : seul le NULL signe l'ère sans prix HT.
+        if ($line->DL_PrixUnitaire !== null) {
+            return (float) $line->DL_PrixUnitaire;
+        }
+
+        $ttc = (float) $line->DL_PUTTC;
+        if (abs($ttc) < 0.000001) {
+            return 0.0;
+        }
+
+        return $ttc / (1 + ((float) $line->DL_Taxe1) / 100);
+    }
+
+    /**
      * Traduit une ligne source en arguments d'addline().
      *
      * @param  stdClass $line         Ligne source
@@ -974,7 +1080,10 @@ class MigrationInvoice extends AeroMigrationRunner
             $vat = 0;
         }
 
-        $price    = (float) $line->DL_PrixUnitaire;
+        $price = $this->lineUnitPriceHt($line);
+        if ($line->DL_PrixUnitaire === null && abs((float) $line->DL_PUTTC) > 0.000001) {
+            $this->ttcDerivedLines++;
+        }
         $discount = (float) $line->DL_Remise01REM_Valeur;
 
         // ------------------------------------------------------------------------------
@@ -1174,18 +1283,18 @@ class MigrationInvoice extends AeroMigrationRunner
             return;
         }
 
-        $customerCode = $this->indexKey($row->DO_Tiers);
-        if (!isset($this->customerBySage[$customerCode])) {
-            $this->missingCustomers++;
-            $this->missingCustomerCodes[$customerCode] = true;
-            $this->previewDecision[$piece] = 'skip';
-            return;
-        }
-
         if (empty($this->linesByDocument[$piece])) {
             $this->emptyDocuments++;
             $this->previewDecision[$piece] = 'skip';
             return;
+        }
+
+        // Client disparu : compté, mais la facture sera créée — rattachée au tiers générique.
+        // La simulation n'écrit rien : le tiers lui-même n'est résolu qu'au passage réel.
+        $customerCode = $this->indexKey($row->DO_Tiers);
+        if (!isset($this->customerBySage[$customerCode])) {
+            $this->missingCustomers++;
+            $this->missingCustomerCodes[$customerCode] = true;
         }
 
         if ($orderId > 0) {
@@ -1252,8 +1361,13 @@ class MigrationInvoice extends AeroMigrationRunner
             $report[] = $this->emptyDocuments.' document(s) sans aucune ligne : écarté(s)';
         }
         if ($this->missingCustomers > 0) {
-            $report[] = $this->missingCustomers.' facture(s) sans client repris : écartée(s) — '
+            $report[] = $this->missingCustomers.' facture(s) dont le client a disparu d\'ADD :'
+                .' rattachée(s) au tiers générique « '.self::GENERIC_CUSTOMER_NAME.' » — '
                 .$this->sample(array_keys($this->missingCustomerCodes));
+        }
+        if ($this->ttcDerivedLines > 0) {
+            $report[] = $this->ttcDerivedLines.' ligne(s) sans prix HT à la source (ère Sage native) :'
+                .' prix reconstruit du TTC et de la TVA de ligne';
         }
         if ($this->missingProductLines > 0) {
             $report[] = $this->missingProductLines.' ligne(s) dont l\'article est introuvable : reprise(s) en texte libre — '

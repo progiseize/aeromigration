@@ -1101,6 +1101,32 @@ Les trois points qui décideront du périmètre, résumés ici :
 À l'inverse, les rattachements sont excellents : 99,9 % des documents de vente retrouvent
 leur tiers, 96 % des lignes de facture retrouvent leur produit.
 
+### D1. L'ère Sage native ne porte aucun prix unitaire HT — 62 716 factures reprises à 0 €
+
+**Toutes les lignes de l'ère `FAC` (oct. 2015 → mars 2019) ont `DL_PrixUnitaire` à NULL** —
+148 114 lignes sur 148 114. Seul `DL_PUTTC` y est rempli (148 002 lignes), avec `DL_Taxe1`
+toujours renseigné (20, 5,5 ou 0 %). La reprise construisait les lignes depuis le HT : les
+62 716 factures de l'ère — **6,79 M€ TTC dans ADD** — sont toutes entrées à 0,00 €, sans une
+erreur, une ligne à zéro étant parfaitement légale.
+
+Découvert le 19/08/2026, en rattachant les factures des clients disparus : le contrôle des
+montants de la veille l'avait pourtant montré (« 62 407 écarts FAC, cumul 6,8 M€ ») mais avait
+été mal lu — la colonne `DL_MontantTTC` passait pour non comparable sur cette ère, alors que
+c'est Dolibarr qui était à zéro.
+
+Correctif en 0.16.1 (`lineUnitPriceHt()`) : quand le HT est NULL, le prix est reconstruit —
+`PUTTC / (1 + taxe/100)` — et retombe sur `DL_MontantHT` au centime sur les lignes
+vérifiables. **Seul le NULL déclenche le repli** : un HT réellement à zéro (ligne offerte,
+texte) reste à zéro. Réparation de l'existant par `scripts/fix_invoice_zero_amounts.php`
+(suppression des zéros à signature « PU NULL + PUTTC rempli », puis rejeu de la reprise).
+
+Deux pièges dans le périmètre de réparation :
+- les **ventes magasin réglées par avoir** (`F02…`) sont légitimement à zéro : une ligne
+  `#AVOIR` négative, dont le montant ne vit que dans le PU, équilibre la marchandise — la
+  somme des `DL_MontantTTC` d'ADD les fait passer pour valorisées ;
+- `ABS(NULL)` élimine la ligne d'un `WHERE` : compter les PU vides exige `COALESCE`, sans
+  quoi le phénomène paraît toucher 3 pièces au lieu de 62 967.
+
 ## Pièges Dolibarr rencontrés
 
 ### P1. `purge.php product --confirm` détruit des produits de la boutique

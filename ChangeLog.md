@@ -6,6 +6,34 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.16.1] — 2026-08-19
+
+### Corrigé — 62 716 factures de l'ère Sage native reprises à 0,00 € : 6,79 M€ restitués
+
+**Toutes les lignes de l'ère `FAC` (oct. 2015 → mars 2019) ont leur prix unitaire HT à NULL** —
+seul `DL_PUTTC` est rempli. La reprise construisait depuis le HT : l'ère entière est entrée à
+0,00 €, sans une erreur, et le contrôle des montants qui le montrait (« 62 407 écarts FAC,
+cumul 6,8 M€ ») avait été mal interprété. Voir ANOMALIES D1.
+
+`mapLine()` reconstruit désormais le prix du TTC et de la TVA de ligne quand le HT est NULL —
+vérifié au centime contre `DL_MontantHT` ; un HT réellement à zéro (ligne offerte) reste à
+zéro. Le nouveau `scripts/fix_invoice_zero_amounts.php` répare l'existant : périmètre
+dynamique (zéro Dolibarr + signature « PU NULL, PUTTC rempli » + source valorisée — les
+ventes magasin réglées par avoir, légitimement nulles, sont épargnées), suppression par le
+chemin PROV, puis rejeu de `migrate.php invoice` qui recrée au bon montant.
+
+### Changé — les factures aux clients disparus sont reprises, rattachées à « Clients Anonymisés »
+
+311 factures réelles de 2015-2019 (53 460,39 € TTC) étaient écartées : leur client a disparu
+de `f_comptet` lui-même — sinistre ADD de 2019 et anonymisations (des fiches au nom brouillé
+et un « Anonymized Client » figurent dans la source). La facture se conserve dix ans, la
+personne non : **décision client du 19/08/2026**, elles sont désormais créées et rattachées à
+un tiers générique **« Clients Anonymisés »** (`ref_ext SAGE:CLIENT_ANONYME`, créé par
+`Societe::create()` au premier besoin, idempotent et purgeable comme le reste de la reprise).
+Le code client ADD d'origine est conservé dans la note privée de chaque facture. Le contrôle
+« document sans ligne » passe désormais avant la résolution du client, pour ne pas créer le
+tiers générique au service d'un document vide.
+
 ## [0.16.0] — 2026-08-19
 
 ### Ajouté — `relink_prestasync.php` : les liaisons boutique survivent à une reprise sur base neuve
