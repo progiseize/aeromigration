@@ -6,6 +6,17 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.16.3] — 2026-08-19
+
+### Retiré — les catégories de familles (ADD V20, V5, DIVERS, AREAFFECTER)
+
+Le client y a renoncé le 19/08/2026 : la reprise `product` ne crée plus ces quatre catégories et
+n'y rattache plus rien — seul le **classement commercial du catalogue** (CL_No1-3, script
+`category`) subsiste. Les quatre catégories existantes et leurs 15 907 rattachements ont été
+supprimés des deux instances par l'API Categorie. La note de mise en production gagne au passage
+le pré-requis PHP CLI (`-d max_execution_time=0` : sous Linux la limite compte le temps CPU et
+fauche les passages calculatoires, vécu sur le test).
+
 ## [0.16.2] — 2026-08-19
 
 ### Ajouté — `product --only=status` : le couple disponibilité/suivi aligné sur ADD

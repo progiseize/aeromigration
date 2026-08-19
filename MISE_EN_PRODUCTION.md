@@ -37,6 +37,11 @@ Dans l'ordre inverse, rien de tout cela n'existe. Deux réserves :
 - **`secure_file_priv`** : `import_add_csv.php` passe par `LOAD DATA INFILE` ; les CSV doivent
   être déposés sous le dossier que le serveur MySQL autorise (le script le vérifie et indique
   le chemin attendu).
+- **PHP CLI : `-d memory_limit=1024M -d max_execution_time=0` sur chaque script.** Sous Linux,
+  `max_execution_time` compte le temps **CPU** : un passage massivement calculatoire (reprise
+  de dizaines de milliers de factures) meurt à mi-course avec la limite Plesk de 120 s, alors
+  que les passages surtout en attente SQL passent. Vécu sur le test le 19/08 ; les scripts sont
+  idempotents, une relance reprend où elle en était, mais autant ne pas mourir du tout.
 - **Base unique en ligne** : les tables `f_*`/`z_*`/`p_*` cohabitent avec les `llx_*`. Poser la
   constante `AEROMIG_SOURCE_DB` en conséquence (ou `--source-db=` sur chaque script, vide pour
   « la base de Dolibarr »), et `--database=`/`--model=` pour l'import CSV. `--only=` évite d'y

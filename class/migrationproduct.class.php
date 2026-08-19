@@ -125,16 +125,6 @@ class MigrationProduct extends AeroMigrationRunner
     protected $defaultVat = 20;
 
     /**
-     * Préfixe des catégories créées à partir des familles d'articles.
-     *
-     * « ADD » est le nom de l'ancien ERP tel que le client le désigne : les catégories
-     * lui parlent ainsi davantage qu'une référence à l'éditeur du logiciel.
-     *
-     * @var string
-     */
-    protected $categoryPrefix = 'ADD';
-
-    /**
      * Correspondance des libellés de disponibilité vers le dictionnaire du module
      * aerotoolbox. Clés normalisées (minuscules, sans accent, ponctuation réduite).
      *
@@ -171,9 +161,6 @@ class MigrationProduct extends AeroMigrationRunner
 
     /** @var array<string,int> Code du dictionnaire de suivi -> rowid */
     protected $trackingByCode = array();
-
-    /** @var array<string,int> Code famille Sage -> rowid de la catégorie produit */
-    protected $categoryByFamily = array();
 
     /** @var array<int,int> CL_No du catalogue -> rowid de la catégorie Dolibarr */
     protected $categoryByClNo = array();
@@ -246,7 +233,7 @@ class MigrationProduct extends AeroMigrationRunner
             return -1;
         }
 
-        return $this->prepareCategories();
+        return 1;
     }
 
     /**
@@ -610,68 +597,6 @@ class MigrationProduct extends AeroMigrationRunner
         }
 
         return 'created';
-    }
-
-    /**
-     * Crée si besoin une catégorie produit par famille Sage, et mémorise leur rowid.
-     *
-     * Les catégories passent par l'API Categorie : elles restent ainsi manipulables
-     * normalement par le client, qui pourra les renommer ou les réorganiser.
-     *
-     * @return int 1 si OK, -1 en cas d'erreur
-     */
-    protected function prepareCategories()
-    {
-        $sql   = "SELECT DISTINCT FA_CodeFamille FROM ".$this->src($this->srcTable);
-        $sql  .= " WHERE TRIM(COALESCE(FA_CodeFamille,'')) <> ''";
-        $resql = $this->db->query($sql);
-        if (!$resql) {
-            $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
-            return -1;
-        }
-
-        $families = array();
-        while ($obj = $this->db->fetch_object($resql)) {
-            $families[] = $obj->FA_CodeFamille;
-        }
-        $this->db->free($resql);
-
-        foreach ($families as $family) {
-            $label = $this->categoryPrefix.' '.$family;
-
-            $categorie = new Categorie($this->db);
-            $existing  = $categorie->fetch(0, $label, Categorie::TYPE_PRODUCT);
-
-            if ($existing > 0) {
-                $this->categoryByFamily[$family] = (int) $categorie->id;
-                continue;
-            }
-
-            if ($this->dryrun) {
-                // En simulation, on ne crée rien : l'absence de catégorie ne doit pas
-                // faire échouer le contrôle du mapping.
-                $this->categoryByFamily[$family] = 0;
-                continue;
-            }
-
-            $categorie              = new Categorie($this->db);
-            $categorie->label       = $label;
-            $categorie->type        = Categorie::TYPE_PRODUCT;
-            $categorie->description = 'Famille d\'articles reprise de l\'ancien ERP (ADD)';
-            $categorie->visible     = 1;
-
-            if ($categorie->create($this->user) <= 0) {
-                $this->errors[] = array(
-                    'key'     => '',
-                    'message' => 'Échec de la création de la catégorie '.$label.' : '.$this->objectErrors($categorie),
-                );
-                return -1;
-            }
-
-            $this->categoryByFamily[$family] = (int) $categorie->id;
-        }
-
-        return 1;
     }
 
     /**
@@ -1266,12 +1191,10 @@ class MigrationProduct extends AeroMigrationRunner
     {
         $categoryIds = array();
 
-        // Famille de TVA : conservée à la demande du client, en parallèle du classement
-        // commercial.
-        $family = trim((string) $row->FA_CodeFamille);
-        if ($family !== '' && !empty($this->categoryByFamily[$family])) {
-            $categoryIds[] = $this->categoryByFamily[$family];
-        }
+        // Les familles de TVA (ADD V20, V5, DIVERS, AREAFFECTER) ne sont PLUS reprises en
+        // catégories : demandé un temps, le client y a renoncé le 19/08/2026 — seul le
+        // classement commercial du catalogue subsiste. Les catégories déjà créées ont été
+        // supprimées le même jour.
 
         // Classement commercial : un article porte jusqu'à trois catégories du catalogue.
         foreach (array('CL_No1', 'CL_No2', 'CL_No3') as $column) {
@@ -1532,13 +1455,6 @@ class MigrationProduct extends AeroMigrationRunner
             $lines[] = 'Rattachés par leur référence : '.$this->matchedByRef.' produit(s)';
             $lines[] = '  Aucun lien boutique ne les désignait, mais un produit portait déjà leur';
             $lines[] = '  référence : complétés plutôt que recréés.';
-        }
-
-        if (!empty($this->categoryByFamily)) {
-            if ($lines) {
-                $lines[] = '';
-            }
-            $lines[] = 'Catégories de familles : '.implode(', ', array_keys($this->categoryByFamily));
         }
 
         if (empty($this->categoryByClNo)) {
