@@ -41,6 +41,8 @@ php migrate.php supplierorder  commandes fournisseur → relient tiers et articl
 php migrate.php customerorder  commandes clients → adopte celles de la boutique
 php migrate.php invoice        factures et règlements → rattachés à leur commande
 php migrate.php reception      réceptions fournisseur → adossées aux lignes de commande
+php migrate.php shipment       expéditions clients → adossées aux lignes de commande
+php migrate.php proposal       devis clients → statuts de la grille client
 php migrate.php pricelevel     catégorie tarifaire des clients   ⚠ Prestasync coupé
 php migrate.php customerprice  tarifs de vente, les huit niveaux ⚠ Prestasync coupé
 php migrate.php productkit     articles composés → liaisons de kit
@@ -431,10 +433,13 @@ Ce fichier se complète au fur et à mesure de l'écriture des scripts.
 
 ## Documents commerciaux
 
-Quatre familles sont reprises : **commandes clients**, **commandes fournisseur**, **factures
-clients avec leurs règlements**, et **réceptions fournisseur**. Les devis, bons de livraison et
-retours ne le sont pas — leur intérêt rétrospectif est faible et le périmètre reste à arbitrer
-avec le client.
+Six familles sont reprises : **commandes clients**, **commandes fournisseur**, **factures
+clients avec leurs règlements**, **réceptions fournisseur**, **expéditions clients** (les
+« préparations de livraison », type 2 — périmètre complet décidé le 20/08/2026, le client
+perdant tout accès à ADD après la bascule), et **devis clients** (statuts 1/2/9 de la grille
+client — envoyé, refusé, terminé c'est-à-dire transformé en commande ; brouillons et annulés
+écartés). Les « bons de livraison » type 3 — le carnet atelier/SAV, ordres de réparation
+compris — sont **écartés**, décision client du 20/08/2026.
 
 **Les factures fournisseur ne sont pas reprises, et ne le seront pas** : le client ne les a
 jamais gérées dans l'ancien ERP. La source le confirme — sur ses 2 139 factures d'achat,
@@ -444,6 +449,12 @@ réceptions a été demandé.
 ⚠️ **Les réceptions reprises doivent rester au statut validé.** Les clôturer ajouterait leurs
 387 502 unités au stock d'ouverture : `STOCK_CALCULATE_ON_RECEPTION_CLOSE` vaut 1, imposée par
 le coeur du fait du module lots/séries, et ne peut pas être désactivée.
+
+⚠️ **Les expéditions reprises sont clôturées et doivent le rester.** Le script `shipment` a pu
+les clôturer sans mouvement parce qu'il neutralise les modules stock et lots **dans la mémoire
+de son seul processus** — l'application, elle, a ses modules actifs : rouvrir une expédition
+reprise depuis l'écran puis la reclôturer déclencherait cette fois la sortie de stock
+(`STOCK_CALCULATE_ON_SHIPMENT_CLOSE`, imposée par le coeur comme pour les réceptions).
 
 L'analyse préalable des quatre tables est dans [DOCUMENTS.md](DOCUMENTS.md) : nomenclature des
 types, colonnes exploitables, volumétrie et correspondance avec les objets Dolibarr. Elle tenait

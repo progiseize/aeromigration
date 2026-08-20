@@ -1082,24 +1082,46 @@ repli.
 
 ---
 
-## Documents commerciaux (`f_doc*`) — non repris
+## Documents commerciaux (`f_doc*`)
 
 Les quatre tables de documents — 318 030 en-têtes, 1 039 279 lignes — ont été analysées le
-29/07/2026 mais **aucune reprise n'est engagée**. L'état des lieux complet est dans
-[DOCUMENTS.md](DOCUMENTS.md) : nomenclature des types, colonnes utiles, rattachements
-mesurés, correspondance possible avec les objets Dolibarr et requêtes de référence.
+29/07/2026. Depuis, six familles sont reprises (commandes clients et fournisseur, factures
+avec leurs règlements — retrouvés dans `z_docregl_global` —, réceptions, expéditions, devis) ;
+le carnet atelier type 3 est écarté (décision client, 20/08/2026). Pour les devis, le statut
+fait foi par la grille donnée par le client le 20/08/2026 — l'écran ADD affiche « Terminée »
+pour le statut 9 là où le dictionnaire `z_statut_document` de l'export dit encore « Devis
+refusé » : le libellé a été renommé côté ADD, et « terminée » signifie « transformée en
+commande ».
 
-Les trois points qui décideront du périmètre, résumés ici :
+Points d'origine toujours vrais :
 
-- **Aucun règlement n'est enregistré** — les colonnes prévues sont vides sur les 181 111
-  factures. Reprises telles quelles, elles arriveraient toutes impayées. C'est le point
-  bloquant.
 - **Coupure d'archivage fin 2019** : avant, il ne reste que des factures comptabilisées.
-- **314 bons de livraison pour 61 377 préparations** : le flux s'arrête à la préparation,
-  la sortie de stock se faisant à la facturation.
+- **316 bons de livraison pour 62 519 préparations** : le vrai flux d'expédition est la
+  préparation de livraison (type 2) ; le type 3 est le carnet atelier/SAV.
 
-À l'inverse, les rattachements sont excellents : 99,9 % des documents de vente retrouvent
-leur tiers, 96 % des lignes de facture retrouvent leur produit.
+Les rattachements sont excellents : 99,9 % des documents de vente retrouvent leur tiers,
+96 % des lignes de facture retrouvent leur produit.
+
+### D2. Préparations de livraison : statut muet, port posé à l'expédition, composants à 0 €
+
+Quatre constats mesurés le 20/08/2026 sur le type 2, qui fondent les choix du script
+`shipment` :
+
+- **le statut ne dit rien** : le dictionnaire de la surcouche ne définit que le 0
+  (« A préparer »), porté par 1 824 pièces pourtant soldées et facturées ; le 9 (terminal)
+  couvre le reste, et `Z_Solde` contredit les dates (330 « non soldées » étalées 2019-2026).
+  Tout est repris clôturé ;
+- **les frais de port et modes de retrait naissent à l'expédition** (PORTSTD ×15 321,
+  RETRAITRELAIS ×8 826, PORTLCS, PORTINT, RETRAITMAG…) : absents de la commande par nature,
+  ils ne peuvent pas devenir des lignes d'expédition Dolibarr — recopiés en note ;
+- **les produits montés s'expédient parent + composants** : la préparation liste le kit à son
+  prix PUIS ses composants à 0 € (vérifié sur les pochettes VFR). Seul le parent se rattache
+  à la commande ; les composants vont en note ;
+- **296 des 361 « sans commande » sont des coquilles vides** — aucune ligne, créées en rafale
+  à la seconde (artefact ADD) ; une vingtaine des autres se rattrape par `DO_NoWeb` (numéro de
+  commande ou numéro web commun), le reliquat est écarté et listé. Les 6 797 lignes sans
+  article sont des annotations — dont les **numéros de série livrés**, seule traçabilité série
+  de l'ancien ERP, préservés dans la note de chaque expédition.
 
 ### D1. L'ère Sage native ne porte aucun prix unitaire HT — 62 716 factures reprises à 0 €
 
@@ -1471,6 +1493,33 @@ données avant de l'adopter.
 
 Employé par `MigrationProductKit::refExpr()`. Les autres scripts n'y sont pas exposés : ils
 comparent des colonnes de même nature, jamais un entier à une chaîne.
+
+### P20. Les modules se neutralisent en mémoire — et l'expédition a trois chausse-trapes
+
+`isModEnabled()` ne lit pas la base : il lit `$conf->modules`, chargé au démarrage du
+processus (functions.lib.php:465). Un script CLI peut donc retirer un module de SA
+configuration — `unset($conf->modules['stock'])` — sans toucher à l'instance : c'est ce qui
+permet à `shipment` de clôturer 58 000 expéditions sans un mouvement de stock, pendant que
+l'application garde ses modules actifs. Aucun état à restaurer si le script meurt.
+
+Trois comportements du coeur l'imposent, tous vérifiés dans `expedition.class.php` :
+
+- `setClosed()` ne crée le mouvement que si `isModEnabled('stock') &&
+  STOCK_CALCULATE_ON_SHIPMENT_CLOSE` (ligne 2923) — et cette constante est FORCÉE par le
+  coeur dès que le module lots est actif, comme pour les réceptions (P16) ;
+- `addline()` refuse tout article suivi par lot — `ADDLINE_WAS_CALLED_INSTEAD_OF_
+  ADDLINEBATCH` (ligne 1276) — dès que `isModEnabled('productbatch')`, même sans stock ;
+- `create()` éclate les produits composés en lignes de composants si `PRODUIT_SOUSPRODUITS`
+  est posée (ligne 524).
+
+**Effets de bord sur la commande d'origine, à défaire :** `valid()` la passe en « expédition
+en cours » (ligne 1067) et `setClosed()` la clôture quand les quantités se recoupent (ligne
+2915) — faux sur un historique dont `customerorder` a déjà posé les statuts d'après la
+source. `shipment` relève le statut avant et le restaure après via `setStatut()`.
+
+**Corollaire d'exploitation :** une expédition reprise clôturée doit LE RESTER. La rouvrir
+depuis l'écran puis la reclôturer déclencherait cette fois la sortie de stock, l'application
+ayant ses modules actifs.
 
 
 ## Tarifs clients (`z_tarifparticulier`)

@@ -165,6 +165,15 @@ function aeromigrationGetScripts()
             'class' => 'MigrationReception',
             'file'  => '/aeromigration/class/migrationreception.class.php',
         ),
+        // Dépend des tiers ET des articles. Périmètre client du 20/08/2026 : statuts 1/2/9,
+        // les brouillons (dont les ordres de réparation OR) et les annulés sont écartés.
+        // Référence définitive posée à la création, aucun PDF généré.
+        array(
+            'code'  => 'proposal',
+            'label' => 'AeroMigScriptProposal',
+            'class' => 'MigrationProposal',
+            'file'  => '/aeromigration/class/migrationproposal.class.php',
+        ),
         // Dépend des articles, des entrepôts ET des commandes clients : chaque expédition
         // s'adosse aux lignes de sa commande. Ne mouvemente pas le stock : les modules stock
         // et lots sont neutralisés en mémoire le temps du processus, et le rapport vérifie

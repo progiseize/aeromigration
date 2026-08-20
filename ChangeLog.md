@@ -6,6 +6,29 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.19.0] — 2026-08-20
+
+### Ajouté — `migrate.php proposal` : les devis clients
+
+Reprise des devis (type 0 du domaine vente) en propositions commerciales, selon la grille de
+statuts donnée par le client le 20/08/2026 — l'écran ADD affiche « Terminée » là où le
+dictionnaire de l'export disait encore « Devis refusé », le libellé ayant été renommé :
+
+- **1 « envoyé »** (617) → validée, ouverte ; **2 « refusé »** (13) → close non signée ;
+  **9 « terminée », c'est-à-dire transformée en commande** (667) → close **signée**, la date
+  de signature réécrite à la date de la pièce (`closeProposal()` la daterait du passage).
+  Aucun rattachement à la commande : la source n'en conserve pas le lien (2 cas sur 667) ;
+- écartés : **statut 0 « brouillon »** (un devis de 2020 et les 5 ordres de réparation OR du
+  carnet atelier), les **146 annulés** (« aucun intérêt », décision client) et les 72 sans
+  aucune ligne ;
+- **référence définitive dès la création**, même règle que factures et expéditions :
+  `DE<millésime>-<chiffres>` avant le 01/10/2023, séquence par exercice après — calculée de
+  la seule source, contrôles d'unicité et de collision avant toute écriture ;
+- **aucun PDF généré** : `closeProposal()` fabrique sinon le document de chaque devis clos
+  (propal.class.php:2709) — `MAIN_DISABLE_PDF_AUTOUPDATE` est posée en mémoire du seul
+  processus, avec `PROPALE_NOCHECK_ONSALE_PRODUCTS_ONVALID` pour les articles retirés de la
+  vente que l'historique référence.
+
 ## [0.18.0] — 2026-08-20
 
 ### Ajouté — `migrate.php shipment` : les expéditions clients

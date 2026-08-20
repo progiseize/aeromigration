@@ -71,8 +71,9 @@ document (`MAX(DO_Date)` sur `f_docentete_global`) au jour J.
 ### 3. Rejouer les reprises
 
 Dans l'ordre du README (`thirdparty → contact → newsletter → category → product →
-supplierprice → warehouse → location → stock → productlocation → customerorder →
-supplierorder → invoice → pricelevel → customerprice`), chacune en `--dry-run` d'abord.
+supplierprice → warehouse → location → stock → productlocation → supplierorder →
+customerorder → invoice → reception → shipment → proposal → pricelevel → customerprice →
+productkit`), chacune en `--dry-run` d'abord.
 
 Points d'attention hérités du test :
 
@@ -83,6 +84,13 @@ Points d'attention hérités du test :
   factures dont le tiers a disparu de `f_comptet` lui-même sont **reprises** depuis la 0.16.1,
   rattachées au tiers générique « Clients Anonymisés » (décision client du 19/08/2026) —
   créé automatiquement au premier besoin, code ADD d'origine en note de chaque facture.
+- **`shipment` exige que `customerorder` soit passé en entier** : une commande citée par une
+  préparation et absente de la cible est une erreur, pas un écart. Ses expéditions naissent
+  clôturées **avec leur référence définitive** (`BL…`, règle des factures — coupure 01/10/2023,
+  validée par le client le 20/08/2026) : aucune renumérotation ultérieure, et le stock ne bouge
+  pas — le script neutralise les modules stock/lots dans la mémoire de son seul processus et le
+  vérifie au rapport. Écartés attendus : ≈ 296 coquilles vides, ≈ 53 documents sans commande,
+  2 pièces du carnet atelier (OR), 2 236 annulées.
 
 ### 4. Aligner les produits composés
 

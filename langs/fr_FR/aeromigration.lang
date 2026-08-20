@@ -35,6 +35,7 @@ AeroMigScriptCustomerOrder=Commandes clients
 AeroMigScriptInvoice=Factures et règlements clients
 AeroMigScriptReception=Réceptions fournisseur
 AeroMigScriptShipment=Expéditions clients
+AeroMigScriptProposal=Devis clients
 AeroMigScriptPriceLevel=Catégorie tarifaire des clients
 AeroMigScriptCustomerPrice=Tarifs clients par niveau
 AeroMigScriptProductKit=Articles composés (kits)
