@@ -34,6 +34,7 @@ AeroMigScriptSupplierOrder=Supplier orders
 AeroMigScriptCustomerOrder=Customer orders
 AeroMigScriptInvoice=Customer invoices and payments
 AeroMigScriptReception=Supplier receptions
+AeroMigScriptShipment=Customer shipments
 AeroMigScriptPriceLevel=Customer price category
 AeroMigScriptCustomerPrice=Customer prices by level
 AeroMigScriptProductKit=Product kits

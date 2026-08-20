@@ -6,6 +6,43 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.18.0] — 2026-08-20
+
+### Ajouté — `migrate.php shipment` : les expéditions clients
+
+Reprise des 62 519 « préparations de livraison » d'ADD (type 2 du domaine vente) en
+expéditions Dolibarr, adossées ligne à ligne aux commandes clients reprises — périmètre
+complet décidé le 20/08/2026, le client perdant tout accès à ADD après la bascule. Les 316
+« bons de livraison » type 3, carnet atelier/SAV (ordres de réparation compris), sont écartés
+du périmètre à la demande du client.
+
+Les points structurants, arrêtés en séance :
+
+- **le stock ne bouge pas** : le module lots force la sortie de stock à la clôture des
+  expéditions, mais le coeur ne lit que la configuration EN MÉMOIRE — le script retire
+  « stock », « productbatch » et `PRODUIT_SOUSPRODUITS` de la sienne, pour son seul processus.
+  Rien n'est désactivé en base, l'application reste intacte pour les autres, et le rapport
+  vérifie que `llx_stock_mouvement` n'a pas gagné une ligne. Corollaire au rapport : ne JAMAIS
+  rouvrir puis reclôturer une expédition reprise depuis l'écran ;
+- **tout est clôturé**, plus le drapeau « facturée » quand la commande est citée par une
+  facture de la source — les statuts ADD ne portent rien d'exploitable (le « A préparer »
+  coiffe des pièces soldées). Les effets de bord du coeur sur la commande d'origine
+  (« expédition en cours » à la validation, clôture au solde) sont défaits : son statut,
+  posé par `customerorder` d'après la source, est relevé avant et restauré après ;
+- **référence définitive dès la création** — aucune expédition n'existait en cible : même
+  règle que les factures (client, 20/08/2026), `BL<millésime>-<chiffres ADD>` avant le
+  01/10/2023, séquence à six chiffres par exercice après, calculée de la seule source donc
+  stable de passage en passage. `create()` et `valid()` respectent une référence posée
+  d'avance : le module de numérotation n'est jamais sollicité ;
+- **rattachement article + prix** : la source ne garde pas le numéro de la ligne de commande
+  d'origine. L'appariement se fait par article, départagé par le prix unitaire (615 des 864
+  doublons article/commande ont des prix distincts), à égalité dans l'ordre du document en
+  suivant les quantités restantes — y compris celles servies aux passages précédents ;
+- **rien ne se perd** : les 6 797 lignes sans article — numéros de série livrés, compositions
+  de produits montés, franco — sont recopiées dans la note privée de l'expédition. Les 361
+  documents sans commande se réduisent à 296 coquilles vides et ~65 pièces dont une vingtaine
+  se rattrape par `DO_NoWeb` ; le reliquat est écarté et listé.
+
 ## [0.17.0] — 2026-08-19
 
 ### Ajouté — `renumber_invoices.php` : la numérotation définitive du parc

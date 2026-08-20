@@ -165,6 +165,16 @@ function aeromigrationGetScripts()
             'class' => 'MigrationReception',
             'file'  => '/aeromigration/class/migrationreception.class.php',
         ),
+        // Dépend des articles, des entrepôts ET des commandes clients : chaque expédition
+        // s'adosse aux lignes de sa commande. Ne mouvemente pas le stock : les modules stock
+        // et lots sont neutralisés en mémoire le temps du processus, et le rapport vérifie
+        // que llx_stock_mouvement n'a pas bougé.
+        array(
+            'code'  => 'shipment',
+            'label' => 'AeroMigScriptShipment',
+            'class' => 'MigrationShipment',
+            'file'  => '/aeromigration/class/migrationshipment.class.php',
+        ),
         // Dépend des tiers. Ne crée rien : réaligne la catégorie tarifaire des fiches
         // existantes sur aeromigration_price_level(). À passer avec « customerprice », les
         // clients et les tarifs ne se correspondant pas entre les deux.
