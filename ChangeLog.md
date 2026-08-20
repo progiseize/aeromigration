@@ -6,6 +6,18 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.21.0] — 2026-08-20
+
+### Ajouté — `renumber_supplier_orders.php` : la série COF sur les commandes fournisseur
+
+Même règle et même squelette que `renumber_invoices.php` (coupure 01/10/2023, numéro ADD
+avant, séquence six chiffres par exercice après, série unique `COF`). Le numéro source vient
+du `ref_ext` — jamais de la référence actuelle, hétéroclite (`CF7344`, `BCF…`, un
+`undefinedBCF9900` d'incident d'écran) et assainie d'un coup. Garde-fou documents, contrôles
+d'unicité, pré-phase anti-collision, brouillons `(PROV` ignorés, rejouable. Il affiche en fin
+de passage la dernière référence de la série en cours, celle que le modèle COF d'aerotoolbox
+1.16.0 continuera.
+
 ## [0.20.0] — 2026-08-20
 
 ### Changé — les réceptions naissent clôturées, avec leur référence définitive
