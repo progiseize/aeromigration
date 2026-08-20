@@ -152,10 +152,15 @@ consulté que par les scripts de contrôle.
 
 Chantier distinct, à jouer **après** les étapes ci-dessus (le parc doit être définitif avant
 de renuméroter) : coupure au 01/10/2023, numéros ADD conservés avant, séquence par exercice
-fiscal après. Deux scripts : `renumber_invoices.php` (FA/AV) et `renumber_supplier_orders.php`
-(COF) — les expéditions, devis et réceptions naissent déjà au format définitif depuis les
-0.18.0/0.19.0/0.20.0, et les commandes clients (CO) restent à arbitrer (PDF, anti-doublon
-Prestasync, périmètre boutique).
+fiscal après. Trois scripts : `renumber_invoices.php` (FA/AV), `renumber_supplier_orders.php`
+(COF) et `renumber_customer_orders.php` (CO, périmètre complet boutique comprise) — les
+expéditions, devis et réceptions naissent déjà au format définitif depuis les
+0.18.0/0.19.0/0.20.0. **Le script CO se joue impérativement APRÈS le rattrapage Prestasync et
+la pose des liaisons** : le flux vivant retrouve les commandes par `llx_prestasync_order`,
+mais le filet anti-doublon à la création cherche par référence. Les PDF de commandes sont
+supprimés avant (garde-fou) et ne se régénèrent pas en masse : la boutique les obtiendra à la
+demande via l'endpoint aeropresta (décision client du 20/08/2026 — vaut aussi pour les
+factures).
 
 **La question des PDF est tranchée (19/08/2026)** : sur les instances de test, aucun document
 n'a de valeur — les PDF « transmis » ne l'ont été qu'à la boutique de test. Tout a été

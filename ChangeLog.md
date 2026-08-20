@@ -6,6 +6,25 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.22.0] — 2026-08-20
+
+### Ajouté — `renumber_customer_orders.php` : la série CO sur les commandes clients
+
+Dernière renumérotation rétroactive. Même règle et même squelette que les factures, périmètre
+complet confirmé par le client le 20/08/2026 : numéro ADD avant la coupure (`CI-235850` →
+`CO<millésime>-235850`), séquence par exercice toutes provenances confondues après — la
+boutique garde sa propre référence côté PrestaShop, et `ref_client` porte déjà le couple
+« id / référence ».
+
+Prestasync ne perd rien, vérifié dans son code : le flux vivant retrouve les commandes par
+`llx_prestasync_order` (rowid), le contrôle par référence n'étant qu'un filet anti-doublon à
+la création d'une commande SANS liaison. Contrainte d'ordre au jour J, déjà celle du document
+de mise en production : renuméroter après le rattrapage borné et la pose des liaisons.
+
+Les ~28 700 PDF du rattrapage boutique sont supprimés avant la passe (garde-fou) et ne se
+régénèrent pas en masse : décision client du 20/08/2026, la boutique les obtiendra **à la
+demande** via l'endpoint aeropresta du lot 2 — commandes ET factures.
+
 ## [0.21.0] — 2026-08-20
 
 ### Ajouté — `renumber_supplier_orders.php` : la série COF sur les commandes fournisseur
