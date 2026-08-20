@@ -446,15 +446,13 @@ jamais gérées dans l'ancien ERP. La source le confirme — sur ses 2 139 factu
 `z_docregl_global` ne porte qu'un seul règlement, et sur une commande. Seul l'historique des
 réceptions a été demandé.
 
-⚠️ **Les réceptions reprises doivent rester au statut validé.** Les clôturer ajouterait leurs
-387 502 unités au stock d'ouverture : `STOCK_CALCULATE_ON_RECEPTION_CLOSE` vaut 1, imposée par
-le coeur du fait du module lots/séries, et ne peut pas être désactivée.
-
-⚠️ **Les expéditions reprises sont clôturées et doivent le rester.** Le script `shipment` a pu
-les clôturer sans mouvement parce qu'il neutralise les modules stock et lots **dans la mémoire
-de son seul processus** — l'application, elle, a ses modules actifs : rouvrir une expédition
-reprise depuis l'écran puis la reclôturer déclencherait cette fois la sortie de stock
-(`STOCK_CALCULATE_ON_SHIPMENT_CLOSE`, imposée par le coeur comme pour les réceptions).
+⚠️ **Les expéditions et les réceptions reprises sont clôturées et doivent le rester.** Les
+scripts `shipment` et `reception` (0.20.0) ont pu les clôturer sans mouvement parce qu'ils
+neutralisent les modules stock et lots **dans la mémoire de leur seul processus** —
+l'application, elle, a ses modules actifs : rouvrir une pièce reprise depuis l'écran puis la
+reclôturer déclencherait cette fois le mouvement (`STOCK_CALCULATE_ON_SHIPMENT_CLOSE` /
+`STOCK_CALCULATE_ON_RECEPTION_CLOSE`, imposées par le coeur du fait du module lots). Les deux
+rapports vérifient que `llx_stock_mouvement` n'a pas bougé d'une ligne.
 
 L'analyse préalable des quatre tables est dans [DOCUMENTS.md](DOCUMENTS.md) : nomenclature des
 types, colonnes exploitables, volumétrie et correspondance avec les objets Dolibarr. Elle tenait

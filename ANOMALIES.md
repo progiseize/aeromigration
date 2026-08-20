@@ -1521,6 +1521,15 @@ source. `shipment` relève le statut avant et le restaure après via `setStatut(
 depuis l'écran puis la reclôturer déclencherait cette fois la sortie de stock, l'application
 ayant ses modules actifs.
 
+**Effet de bord fonctionnel découvert sur les réceptions (0.20.0) :** la neutralisation ne
+retire pas que des contrôles. `Reception::addline()` ne pose le produit sur la ligne empilée
+QUE dans son bloc `isModEnabled('stock')` (reception.class.php:981) — module neutralisé,
+`$line->fk_product` reste à zéro et `create()` refuse toutes les lignes (« property
+->fk_product must not be empty »), 2 523 documents en échec au premier passage. Le script
+pose donc le produit lui-même après l'appel. Avant d'étendre la neutralisation à un nouveau
+script, relire CHAQUE bloc `isModEnabled('stock')` du chemin d'écriture : certains portent
+des affectations, pas seulement des vérifications.
+
 
 ## Tarifs clients (`z_tarifparticulier`)
 

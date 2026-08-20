@@ -21,13 +21,24 @@
  *
  * ## Le stock n'est pas touché, et c'est vital
  *
- * `Reception::valid()` ne crée de mouvement que si `STOCK_CALCULATE_ON_RECEPTION` est posée
- * (reception.class.php:681). Elle ne l'est pas sur cette instance — vérifié avant d'écrire une
- * ligne. Sans cette garantie, les 25 143 lignes reprises **s'ajouteraient au stock d'ouverture
- * déjà en place** et doubleraient les quantités de 387 682 unités.
+ * Sans précaution, les 25 143 lignes reprises **s'ajouteraient au stock d'ouverture déjà en
+ * place** et doubleraient les quantités de 387 682 unités — `valid()` mouvemente si
+ * `STOCK_CALCULATE_ON_RECEPTION` est posée (reception.class.php:681), `setClosed()` si le
+ * module lots impose `STOCK_CALCULATE_ON_RECEPTION_CLOSE` (ligne 2053).
  *
- * Si la constante venait à être activée, ce script deviendrait destructeur. `prepare()` s'en
- * assure à chaque passage et refuse de démarrer plutôt que de le découvrir après coup.
+ * Depuis la 0.20.0, la parade est celle des expéditions (ANOMALIES P20) : les modules stock
+ * et lots sont retirés de la configuration EN MÉMOIRE, pour ce seul processus — rien en base,
+ * rien pour les autres, rien à restaurer si le script meurt. Cela permet de livrer les
+ * réceptions **CLÔTURÉES** (elles restaient « validées » à vie auparavant, faute de pouvoir
+ * les clôturer sans mouvement), avec leur **référence définitive `REF<millésime>-…`** posée à
+ * la création — règle des factures, aucune renumérotation rétroactive à prévoir. Le rapport
+ * recompte `llx_stock_mouvement` en fin de passage, et le garde-fou historique sur
+ * `STOCK_CALCULATE_ON_RECEPTION` reste en place, ceinture et bretelles. Les effets de bord de
+ * `setClosed()` sur la commande fournisseur (passage en « reçue ») sont défaits : son statut,
+ * posé par « supplierorder » d'après la source, est relevé avant et restauré après.
+ *
+ * ⚠ COROLLAIRE : ces réceptions doivent RESTER clôturées — en rouvrir une depuis l'écran puis
+ * la reclôturer ajouterait cette fois ses quantités au stock, l'application ayant ses modules.
  *
  * ## Deux façons d'écrire une ligne, et pourquoi les deux servent
  *
@@ -89,6 +100,23 @@ class MigrationReception extends AeroMigrationRunner
     /** Nombre d'exemples conservés par anomalie. */
     const SAMPLES = 5;
 
+    /**
+     * Préfixe des références cibles — nomenclature aerotoolbox 1.16.0, règle des factures
+     * validée par le client le 20/08/2026 : avant la coupure, `REF<millésime>-<chiffres de la
+     * pièce ADD>` ; depuis, séquence chronologique par exercice fiscal (oct→sept).
+     *
+     * Posée AVANT `valid()`, qui conserve toute référence ne commençant pas par « (PROV »
+     * (reception.class.php:656) : le module de numérotation n'est jamais sollicité, et aucune
+     * renumérotation rétroactive ne sera nécessaire — même mécanique que les expéditions.
+     */
+    const REF_PREFIX = 'REF';
+
+    /** Premier jour du premier exercice numéroté en séquence. */
+    const CUTOFF = '2023-10-01';
+
+    /** Longueur du compteur des références en séquence. */
+    const COUNTER_LENGTH = 6;
+
     /** @var string Identifiant du script en ligne de commande */
     public $code = 'reception';
 
@@ -148,6 +176,9 @@ class MigrationReception extends AeroMigrationRunner
     /** @var array<int,array<int,int>> Ligne de commande, par commande puis article */
     protected $orderLineByProduct = array();
 
+    /** @var array<string,string> Document -> référence cible définitive */
+    protected $refByPiece = array();
+
     // ── Compteurs de rapport ───────────────────────────────────────────────
 
     /** @var int Lignes écrites en s'adossant à une ligne de commande */
@@ -199,6 +230,8 @@ class MigrationReception extends AeroMigrationRunner
      */
     protected function prepare()
     {
+        $this->neutralizeStockModules();
+
         foreach (array(
             'checkStockConfiguration',
             'loadWarehouse',
@@ -207,6 +240,7 @@ class MigrationReception extends AeroMigrationRunner
             'loadDocumentLines',
             'loadOrderIndex',
             'loadOrderLines',
+            'computeTargetRefs',
             'countDiscarded',
         ) as $step) {
             if ($this->{$step}() < 0) {
@@ -215,6 +249,61 @@ class MigrationReception extends AeroMigrationRunner
         }
 
         return 1;
+    }
+
+    /** @var int Lignes de llx_stock_mouvement au démarrage, pour le contrôle final */
+    protected $stockMovementsBefore = -1;
+
+    /** @var array<string,int> Commande fournisseur -> statut posé par la reprise des commandes */
+    protected $orderStatus = array();
+
+    /** @var int Commandes fournisseur dont le statut a été restauré après le passage du coeur */
+    protected $restoredOrderStatus = 0;
+
+    /**
+     * Neutralise, POUR CE PROCESSUS SEULEMENT, tout ce qui mouvementerait le stock.
+     *
+     * Même mécanique que `MigrationShipment` (voir ANOMALIES P20) : `isModEnabled()` lit
+     * `$conf->modules`, chargé au démarrage du processus — retirer « stock » et
+     * « productbatch » de ce tableau suffit, sans rien toucher en base ni pour personne
+     * d'autre. C'est ce qui permet de livrer les réceptions **clôturées** : `setClosed()` ne
+     * crée le mouvement d'entrée que si `isModEnabled('stock')` répond vrai
+     * (reception.class.php:2053), et il ne le fait plus. Le rapport recompte
+     * `llx_stock_mouvement` en fin de passage — la garantie est vérifiée, pas seulement
+     * affirmée.
+     *
+     * @return void
+     */
+    protected function neutralizeStockModules()
+    {
+        global $conf;
+
+        unset($conf->modules['stock'], $conf->modules['productbatch']);
+        if (isset($conf->stock)) {
+            $conf->stock->enabled = 0;
+        }
+        if (isset($conf->productbatch)) {
+            $conf->productbatch->enabled = 0;
+        }
+
+        $this->stockMovementsBefore = $this->countStockMovements();
+    }
+
+    /**
+     * Nombre de lignes de llx_stock_mouvement, pour le contrôle « rien n'a bougé ».
+     *
+     * @return int Nombre de mouvements, -1 si le comptage échoue
+     */
+    protected function countStockMovements()
+    {
+        $resql = $this->db->query('SELECT COUNT(*) as nb FROM '.MAIN_DB_PREFIX.'stock_mouvement', 1);
+        if (!$resql) {
+            return -1;
+        }
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+
+        return (int) $obj->nb;
     }
 
     /**
@@ -379,7 +468,7 @@ class MigrationReception extends AeroMigrationRunner
      */
     protected function loadOrderIndex()
     {
-        $sql  = 'SELECT rowid, ref_ext FROM '.MAIN_DB_PREFIX.'commande_fournisseur';
+        $sql  = 'SELECT rowid, ref_ext, fk_statut FROM '.MAIN_DB_PREFIX.'commande_fournisseur';
         $sql .= ' WHERE entity IN ('.getEntity('supplier_order').')';
         $sql .= " AND ref_ext LIKE '".$this->db->escape($this->refExtPrefix)."%'";
 
@@ -390,7 +479,119 @@ class MigrationReception extends AeroMigrationRunner
         }
 
         while ($obj = $this->db->fetch_object($resql)) {
-            $this->orderBySage[$obj->ref_ext] = (int) $obj->rowid;
+            $this->orderBySage[$obj->ref_ext]           = (int) $obj->rowid;
+            $this->orderStatus[(int) $obj->rowid]       = (int) $obj->fk_statut;
+        }
+        $this->db->free($resql);
+
+        return 1;
+    }
+
+    /**
+     * Attribue à chaque réception sa référence définitive.
+     *
+     * Même mécanique que les expéditions et les devis : calcul depuis la seule source, donc
+     * identique à chaque passage ; chiffres de la pièce avant la coupure, séquence
+     * chronologique par exercice après ; contrôle d'unicité puis de collision avec la cible.
+     *
+     * @return int 1 si OK, -1 si un contrôle échoue
+     */
+    protected function computeTargetRefs()
+    {
+        $sql  = 'SELECT DO_Piece, DO_Date FROM '.$this->src($this->srcTable);
+        $sql .= ' WHERE '.$this->srcWhere;
+        $sql .= ' ORDER BY DO_Date ASC, DO_Piece ASC';
+
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
+            return -1;
+        }
+
+        $sequences = array();
+        while ($obj = $this->db->fetch_object($resql)) {
+            $piece = trim((string) $obj->DO_Piece);
+            if ($piece === '' || empty($this->linesByDocument[$piece])) {
+                continue;
+            }
+
+            $date      = (string) $obj->DO_Date;
+            $millesime = $this->fiscalMillesime($date);
+
+            if (substr($date, 0, 10) < self::CUTOFF) {
+                $ref = self::REF_PREFIX.$millesime.'-'.preg_replace('/\D+/', '', $piece);
+            } else {
+                $next = isset($sequences[$millesime]) ? $sequences[$millesime] + 1 : 1;
+                $sequences[$millesime] = $next;
+                $ref = self::REF_PREFIX.$millesime.'-'
+                    .str_pad((string) $next, self::COUNTER_LENGTH, '0', STR_PAD_LEFT);
+            }
+
+            $this->refByPiece[$piece] = $ref;
+        }
+        $this->db->free($resql);
+
+        return $this->checkTargetRefs();
+    }
+
+    /**
+     * Millésime d'exercice fiscal (octobre -> septembre) d'une date source.
+     *
+     * @param string $date Date au format « AAAA-MM-JJ… »
+     * @return string      Millésime à quatre chiffres (oct 2015 -> sept 2016 : « 1516 »)
+     */
+    protected function fiscalMillesime($date)
+    {
+        $year  = (int) substr($date, 0, 4);
+        $month = (int) substr($date, 5, 2);
+
+        $start = ($month >= 10) ? $year : $year - 1;
+
+        return sprintf('%02d%02d', $start % 100, ($start + 1) % 100);
+    }
+
+    /**
+     * Vérifie que l'attribution est saine avant d'écrire quoi que ce soit.
+     *
+     * @return int 1 si OK, -1 si un doublon ou une collision est détecté
+     */
+    protected function checkTargetRefs()
+    {
+        $seen = array();
+        foreach ($this->refByPiece as $piece => $ref) {
+            if (isset($seen[$ref])) {
+                $this->errors[] = array(
+                    'key'     => $piece,
+                    'message' => 'Référence cible en double : '.$ref.' (déjà visée par '.$seen[$ref].')',
+                );
+                return -1;
+            }
+            $seen[$ref] = $piece;
+        }
+
+        $sql   = 'SELECT ref, ref_ext FROM '.MAIN_DB_PREFIX.'reception';
+        $sql  .= ' WHERE entity IN ('.getEntity('reception').')';
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->errors[] = array('key' => '', 'message' => $this->db->lasterror());
+            return -1;
+        }
+
+        while ($obj = $this->db->fetch_object($resql)) {
+            $ref = (string) $obj->ref;
+            if (!isset($seen[$ref])) {
+                continue;
+            }
+            if ((string) $obj->ref_ext !== $this->buildRefExt($seen[$ref])) {
+                $this->db->free($resql);
+                $this->errors[] = array(
+                    'key'     => $seen[$ref],
+                    'message' => 'La référence '.$ref.' est déjà portée par une réception'
+                        .' étrangère à la reprise (ref_ext « '.(string) $obj->ref_ext.' »).'
+                        .' À arbitrer avant de relancer.',
+                );
+                return -1;
+            }
         }
         $this->db->free($resql);
 
@@ -585,14 +786,69 @@ class MigrationReception extends AeroMigrationRunner
 
         $this->addFreeLines($reception, $pending);
 
-        // La validation attribue le numéro définitif et met à jour le statut de la commande
-        // d'origine — le coeur recalcule alors ce qui a été reçu, à partir des réceptions
-        // réelles plutôt que de la déduction faite par le script « supplierorder ».
+        // La référence définitive, posée avant valid() qui la conserve dès lors qu'elle ne
+        // commence pas par « (PROV » (reception.class.php:656) : le module de numérotation
+        // n'est jamais sollicité, aucune renumérotation rétroactive à prévoir.
+        if (!isset($this->refByPiece[$piece])) {
+            throw new Exception('Aucune référence attribuée — incohérence interne');
+        }
+        $reception->ref = $this->refByPiece[$piece];
+
+        $statusBefore = ($orderId > 0 && isset($this->orderStatus[$orderId]))
+            ? $this->orderStatus[$orderId] : null;
+
         if ($reception->valid($this->user) <= 0) {
             throw new Exception('Validation refusée : '.$this->objectErrors($reception));
         }
 
+        // Clôture sans mouvement, les modules stock/lots étant neutralisés pour ce processus.
+        // L'arobase n'étouffe que le bruit connu du coeur : la comparaison aux quantités
+        // commandées lit `$order->receptions[$lineid]` pour CHAQUE ligne de la commande
+        // (reception.class.php:2036), clé absente pour toute ligne jamais réceptionnée.
+        if (@$reception->setClosed() < 0) {
+            throw new Exception('Clôture refusée : '.$this->objectErrors($reception));
+        }
+
+        // setClosed() peut avoir passé la commande fournisseur en « reçue » : son statut a
+        // été posé par « supplierorder » d'après la source, il est restauré s'il a bougé.
+        $this->restoreOrderStatus($reception, $orderId, $statusBefore);
+
         return array('action' => 'created', 'id' => (int) $reception->id);
+    }
+
+    /**
+     * Ramène la commande fournisseur au statut posé par la reprise des commandes.
+     *
+     * @param Reception $reception    Réception tout juste posée (porteuse de l'appel)
+     * @param int       $orderId      rowid de la commande fournisseur, 0 si aucune
+     * @param int|null  $statusBefore Statut relevé avant le passage, null si inconnu
+     * @return void
+     * @throws Exception Si la restauration échoue
+     */
+    protected function restoreOrderStatus(Reception $reception, $orderId, $statusBefore)
+    {
+        if ($orderId <= 0 || $statusBefore === null) {
+            return;
+        }
+
+        $sql   = 'SELECT fk_statut FROM '.MAIN_DB_PREFIX.'commande_fournisseur WHERE rowid = '.((int) $orderId);
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            throw new Exception('Relecture du statut de la commande impossible : '.$this->db->lasterror());
+        }
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+
+        if (!$obj || (int) $obj->fk_statut === $statusBefore) {
+            return;
+        }
+
+        if ($reception->setStatut($statusBefore, $orderId, 'commande_fournisseur', 'none', 'fk_statut') < 0) {
+            throw new Exception('Restauration du statut de la commande refusée : '
+                .$this->objectErrors($reception));
+        }
+
+        $this->restoredOrderStatus++;
     }
 
     /**
@@ -674,12 +930,25 @@ class MigrationReception extends AeroMigrationRunner
                 // La première ligne de chaque réception rend donc 0, qui est un succès. Tester
                 // `<= 0` rejetterait une réception sur deux, sans message d'erreur puisqu'il
                 // n'y en a aucune — mesuré : 16 en échec sur les 20 premières.
-                $result = $reception->addline($this->warehouseId, $orderLineId, $qty);
+                //
+                // L'arobase n'étouffe que du bruit connu : addline() passe par
+                // CommandeFournisseurLigne::fetch(), qui lit des propriétés qu'il n'a pas
+                // sélectionnées (subprice_ttc… — voir ANOMALIES P17) : un « Undefined
+                // property » du coeur par ligne adossée, avec pile xdebug en développement.
+                // Le code de retour, lui, reste contrôlé.
+                $result = @$reception->addline($this->warehouseId, $orderLineId, $qty);
                 if ($result < 0) {
                     throw new Exception('Ligne refusée (article '
                         .($sourceRef !== '' ? $sourceRef : 'texte libre').') : '
                         .$this->objectErrors($reception));
                 }
+
+                // addline() ne pose le produit sur la ligne QUE si le module stock est actif
+                // (reception.class.php:981) — or il est neutralisé pour ce processus, et
+                // create() refuse une ligne sans produit. On le pose nous-mêmes : c'est le
+                // même que celui de la ligne de commande, résolu plus haut.
+                $reception->lines[$result]->fk_product = $productId;
+
                 $this->linkedLines++;
                 continue;
             }
@@ -892,6 +1161,10 @@ class MigrationReception extends AeroMigrationRunner
      */
     public function purge($confirm = false, $progress = null)
     {
+        // Même neutralisation qu'à la reprise : dévalider une réception clôturée rejouerait
+        // sinon le mouvement d'entrée dans l'autre sens (reception.class.php:2214).
+        $this->neutralizeStockModules();
+
         $result = array('count' => 0, 'deleted' => 0, 'failed' => 0, 'errors' => array());
 
         $sql  = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'reception';
@@ -1006,14 +1279,27 @@ class MigrationReception extends AeroMigrationRunner
         }
         $this->appendBlock($lines, 'Écartés à la lecture', $block);
 
-        // Rappel de la garantie qui conditionne tout le script, et de sa limite.
-        $lines[] = 'Stock inchangé : STOCK_CALCULATE_ON_RECEPTION est inactive, la validation'
-            .' ne mouvemente rien.';
-        if (getDolGlobalInt('STOCK_CALCULATE_ON_RECEPTION_CLOSE')) {
-            $lines[] = '  ⚠  STOCK_CALCULATE_ON_RECEPTION_CLOSE vaut 1, imposée par le coeur du fait'
-                .' du module lots/séries. NE CLÔTUREZ PAS ces réceptions : chacune ajouterait'
-                .' alors ses quantités au stock d\'ouverture.';
+        if ($this->restoredOrderStatus > 0) {
+            $lines[] = $this->countLine($this->restoredOrderStatus, 'statut(s) de commande fournisseur'
+                .' restauré(s) après le passage du coeur');
         }
+
+        // La garantie qui conditionne tout le script, vérifiée plutôt qu'affirmée.
+        if ($this->stockMovementsBefore >= 0) {
+            $after = $this->countStockMovements();
+            if ($after === $this->stockMovementsBefore) {
+                $lines[] = 'Stock inchangé : '.number_format($after, 0, ',', ' ')
+                    .' mouvement(s) avant comme après — les modules stock/lots étaient neutralisés'
+                    .' pour ce processus.';
+            } else {
+                $lines[] = '⚠  LE STOCK A BOUGÉ : '.number_format($this->stockMovementsBefore, 0, ',', ' ')
+                    .' mouvement(s) avant le passage, '.number_format($after, 0, ',', ' ')
+                    .' après. À investiguer avant toute autre opération.';
+            }
+        }
+        $lines[] = '⚠  Ces réceptions doivent RESTER clôturées : en rouvrir une depuis l\'écran puis'
+            .' la reclôturer ajouterait cette fois ses quantités au stock, les modules de'
+            .' l\'application étant actifs.';
 
         return $lines;
     }

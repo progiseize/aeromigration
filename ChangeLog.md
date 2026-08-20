@@ -6,6 +6,32 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.20.0] — 2026-08-20
+
+### Changé — les réceptions naissent clôturées, avec leur référence définitive
+
+Découverte au passage en revue : `llx_reception` était **vide sur les deux instances** — le
+rejeu du 19/08 avait sauté les réceptions. Plutôt que de rejouer à l'identique, le script
+adopte les acquis des expéditions (ANOMALIES P20) :
+
+- **modules stock/lots neutralisés en mémoire du seul processus** : les réceptions sont
+  livrées **clôturées** — elles restaient « validées » à vie, faute de pouvoir les clôturer
+  sans ajouter leurs 387 502 unités au stock. Le rapport recompte `llx_stock_mouvement`
+  avant/après, et le garde-fou historique sur `STOCK_CALCULATE_ON_RECEPTION` reste en place ;
+- **référence définitive `REF<millésime>-…` posée à la création** (règle des factures,
+  coupure 01/10/2023) : chiffres de la pièce `BLF` avant, séquence par exercice après —
+  aucune renumérotation rétroactive à prévoir pour les réceptions ;
+- les effets de bord de `setClosed()` sur la commande fournisseur (passage en « reçue ») sont
+  défaits, comme pour les commandes clients : statut relevé avant, restauré après.
+
+⚠ Comme les expéditions, ces réceptions doivent RESTER clôturées : rouvrir puis reclôturer
+depuis l'écran ajouterait cette fois les quantités au stock.
+
+Piège appris au passage (consigné dans ANOMALIES P20) : la neutralisation ne retire pas que
+des contrôles — `Reception::addline()` ne pose le produit sur la ligne que dans son bloc
+`isModEnabled('stock')` (reception.class.php:981), et `create()` refusait alors toutes les
+lignes. Le script pose désormais le produit lui-même.
+
 ## [0.19.1] — 2026-08-20
 
 ### Ajouté — `close_delivered_orders.php` : les commandes intégralement livrées classées « Livrée »
