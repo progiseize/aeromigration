@@ -91,6 +91,11 @@ Points d'attention hérités du test :
   pas — le script neutralise les modules stock/lots dans la mémoire de son seul processus et le
   vérifie au rapport. Écartés attendus : ≈ 296 coquilles vides, ≈ 53 documents sans commande,
   2 pièces du carnet atelier (OR), 2 236 annulées.
+- **Après `shipment`, passer `scripts/close_delivered_orders.php`** (simulation puis
+  `--confirm`) : il classe « Livrée » les commandes que les expéditions couvrent en totalité,
+  en ignorant ce qui ne s'expédie jamais (texte libre, article « Transport », pseudo-articles
+  `PORT*`/`RETRAIT*`). Ni le coeur ni `shipment` ne peuvent le faire seuls — voir le
+  ChangeLog 0.19.1. Les livraisons partielles sont listées, jamais forcées.
 
 ### 4. Aligner les produits composés
 

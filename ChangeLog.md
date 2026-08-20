@@ -6,6 +6,25 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.19.1] — 2026-08-20
+
+### Ajouté — `close_delivered_orders.php` : les commandes intégralement livrées classées « Livrée »
+
+Le manque relevé après le passage de `shipment` : les commandes couvertes par leurs
+expéditions restaient « validées ». Deux causes se cumulaient — la comparaison du coeur exige
+que TOUTE ligne de type produit soit couverte, or presque chaque commande porte une ligne que
+rien n'expédie jamais (l'article « Transport » des commandes boutique, les pseudo-articles
+`PORT*`/`RETRAIT*` de l'ancien ERP, le texte libre) ; et `shipment` restaure le statut posé
+par `customerorder`, ce qui annulait aussi les rares clôtures légitimes.
+
+La règle métier est donc appliquée à part, après coup : **« Livrée » quand toutes les lignes
+d'articles sont couvertes par les expéditions reprises clôturées**, texte libre, services et
+famille logistique (`Transport`, `PORT*`, `*RETRAIT*`, `ECART`, `EMBALLAGE`, `FRANCO`)
+ignorés. Périmètre : les commandes en statut validée ou expédition en cours — les fermées le
+sont déjà, annulées et brouillons intouchés, livraisons partielles listées jamais forcées.
+Écriture par `Commande::cloture()`, simulation par défaut, rejouable. Mesuré au premier
+passage : 27 511 classables sur 27 790 touchées, 279 partielles réelles.
+
 ## [0.19.0] — 2026-08-20
 
 ### Ajouté — `migrate.php proposal` : les devis clients
