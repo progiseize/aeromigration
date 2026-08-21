@@ -1530,6 +1530,16 @@ pose donc le produit lui-même après l'appel. Avant d'étendre la neutralisatio
 script, relire CHAQUE bloc `isModEnabled('stock')` du chemin d'écriture : certains portent
 des affectations, pas seulement des vérifications.
 
+**Second effet découvert sur le stock (0.27.1) :** un produit peut devenir un KIT après sa
+reprise — les nomenclatures aerotoolbox 1.13.0 sont arrivées après l'ouverture du stock.
+Avec `PRODUIT_SOUSPRODUITS` active, `MouvementStock::_create()` ne bouge pas le stock d'un
+parent de kit (`$movestock` reste à 0, mouvementstock.class.php:337) et déplace SES
+COMPOSANTS à la place (ligne 672) : la contre-passation de `purge.php stock` échoue sans
+message (« Erreur inconnue » — 25 refus constatés en ligne le 26/08/2026), et une ouverture
+rejouée créditerait les composants en double. La photo ADD tenant le stock de chaque article
+pour lui-même, `MigrationStock` neutralise la constante en mémoire, à la reprise comme à la
+purge ciblée (`purgeEverything`, en SQL pur, n'est pas concernée).
+
 
 ## Tarifs clients (`z_tarifparticulier`)
 

@@ -299,6 +299,8 @@ class MigrationStock extends AeroMigrationRunner
      */
     protected function prepare()
     {
+        $this->neutralizeKitModule();
+
         foreach (array(
             'loadProductIndex',
             'loadWarehouseIndex',
@@ -312,6 +314,32 @@ class MigrationStock extends AeroMigrationRunner
         }
 
         return 1;
+    }
+
+    /**
+     * Neutralise les produits composés, POUR CE PROCESSUS SEULEMENT.
+     *
+     * Avec `PRODUIT_SOUSPRODUITS` active, `MouvementStock::_create()` ne bouge PAS le stock
+     * d'un parent de kit (mouvementstock.class.php:337, `$movestock` reste à 0) et déplace
+     * SES COMPOSANTS à la place (ligne 672) — pour un parent devenu kit après l'ouverture,
+     * la contre-passation de la purge est refusée sans message, et une ouverture rejouée
+     * compterait le stock en double chez les composants. Or la photo ADD tient le stock de
+     * CHAQUE article pour lui-même, kits compris : ici, un kit est un article comme un autre.
+     *
+     * Tout se joue en mémoire, comme pour les expéditions et réceptions (ANOMALIES P20) :
+     * rien n'est écrit en base, l'application garde la constante active pour tous les autres
+     * processus. Constaté le 26/08/2026 : 25 contre-passations refusées en ligne, toutes sur
+     * des produits devenus kits (nomenclatures aerotoolbox 1.13.0) après la reprise du stock.
+     *
+     * @return void
+     */
+    protected function neutralizeKitModule()
+    {
+        global $conf;
+
+        if (isset($conf->global)) {
+            $conf->global->PRODUIT_SOUSPRODUITS = 0;
+        }
     }
 
     /**
@@ -1276,6 +1304,10 @@ class MigrationStock extends AeroMigrationRunner
     public function purge($confirm = false, $progress = null)
     {
         $result = array('count' => 0, 'deleted' => 0, 'failed' => 0, 'errors' => array());
+
+        // Même neutralisation qu'à la reprise : sans elle, la contre-passation d'un produit
+        // devenu kit depuis l'ouverture est refusée — voir neutralizeKitModule().
+        $this->neutralizeKitModule();
 
         if ($this->purgeAll) {
             return $this->purgeEverything($confirm, $progress);

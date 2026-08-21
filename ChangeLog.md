@@ -6,6 +6,21 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.27.1] — 2026-08-21
+
+### Corrigé — `stock` : les produits devenus kits bloquaient la purge et fausseraient un rejeu
+
+Constaté en ligne (26/08/2026) : 25 contre-passations refusées « Erreur inconnue » par
+`purge.php stock`, toutes sur des produits devenus KITS après l'ouverture du stock (les
+nomenclatures aerotoolbox 1.13.0 — lots de cartes, cartons de bouteilles, pendentifs avec
+chaîne). Avec `PRODUIT_SOUSPRODUITS` active, `MouvementStock::_create()` ne bouge pas le
+stock d'un parent de kit et déplace ses composants à la place : purge refusée aujourd'hui,
+et double comptage chez les composants à tout rejeu d'ouverture.
+
+`MigrationStock` neutralise désormais la constante EN MÉMOIRE (même mécanique que P20 —
+rien d'écrit en base, le seul processus du script est concerné), à la reprise comme à la
+purge ciblée : la photo ADD tient le stock de chaque article pour lui-même, kits compris.
+
 ## [0.27.0] — 2026-08-21
 
 ### Ajouté — `set_alert_stock.php` : un stock d'alerte calculé sur les produits qui n'en ont pas
