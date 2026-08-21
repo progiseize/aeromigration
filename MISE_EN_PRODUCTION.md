@@ -102,6 +102,10 @@ Points d'attention hérités du test :
   **régénérer l'extraction depuis la dernière photo PrestaShop** avant le jour J, comme les
   liaisons) et `import_consignes.php` (garantie, consignes et notes produits arbitrées par le
   client — fichier figé issu de `data/2608_consignes.xlsx`, aucun rafraîchissement à prévoir).
+- **Puis `scripts/set_alert_stock.php`** (simulation puis `--confirm`) : pose le stock
+  d'alerte calculé (ventes ADD 2026 / 8 × 2, arrondi supérieur) sur les produits dont le
+  seuil est vide — les 926 valeurs humaines reprises d'ADD sont conservées. À passer APRÈS
+  `product`, il lit les ventes directement dans les tables source.
 
 ### 4. Aligner les produits composés
 

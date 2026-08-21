@@ -6,6 +6,30 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.27.0] — 2026-08-21
+
+### Ajouté — `set_alert_stock.php` : un stock d'alerte calculé sur les produits qui n'en ont pas
+
+Le stock d'alerte déclenche la liste des « produits à commander prioritairement ». L'ancien
+ERP ne le renseigne que sur 926 articles (`f_artstock.AS_QteMini`, déjà repris) : laisser
+zéro partout rend la liste muette. Arbitrage client (26/08/2026) : une valeur calculée,
+affinée ensuite au cas par cas —
+
+    seuil = arrondi SUPÉRIEUR de ( ventes nettes ADD 2026 / 8 × 2 )
+
+soit deux mois de ventes moyennes, « /8 » figé (huit mois écoulés, reprise à deux semaines),
+arrondi supérieur voulu (prudence de stock : tout article vendu obtient au moins 1).
+
+- Ne comble que les VIDES : un seuil déjà > 0 est une valeur humaine, conservée — le script
+  est rejouable, ses propres seuils deviennent « conservés » au second passage.
+- Hors périmètre : services, famille logistique (même liste que `close_delivered_orders` —
+  la formule donnerait à `PORTSTD` le plus gros seuil du catalogue : 586), articles sans
+  vente 2026 ou à ventes nettes négatives (seuil laissé à zéro, jamais en alerte).
+- Références appariées en forme canonique ; source résolue comme les scripts de reprise
+  (`AEROMIG_SOURCE_DB`, `--source-db=`). Simulation par défaut, `--limit`.
+- Local (données du 21/08) : 2 636 seuils posés (1 774 à 1, 554 de 2 à 4, 229 de 5 à 19,
+  79 à 20+), 927 conservés, 12 316 sans vente laissés à zéro.
+
 ## [0.26.0] — 2026-08-21
 
 ### Ajouté — `import_consignes.php` : garantie, consignes et notes produits arbitrées par le client
