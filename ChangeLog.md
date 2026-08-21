@@ -6,6 +6,25 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.24.0] — 2026-08-21
+
+### Ajouté — `import_birthdays.php` : les dates de naissance de la boutique sur les contacts
+
+L'ancien ERP n'a jamais tenu les dates de naissance (148 sur 157 803) : la source est
+PrestaShop (66,9 % des clients). L'extraction
+`migrationdata/naissances_contacts_*.csv` ne porte que des CLÉS PORTABLES — code tiers ADD
+(99,8 % des lignes, résolu par le `ref_ext` que la reprise pose), e-mail en repli s'il ne
+désigne qu'un tiers — donc valable telle quelle au jour J, à régénérer depuis la dernière
+photo comme les fichiers de liaison. Le dossier `migrationdata/` rejoint le `.gitignore` :
+données personnelles, jamais versionnées.
+
+La date se pose sur le CONTACT (`llx_socpeople.birthday`, le champ natif), pour les TIERS
+PARTICULIERS uniquement. Tiers multi-contacts (adresses de livraison dupliquées par la
+boutique) : prénom+nom identiques = la même personne, le contact le plus ancien reçoit la
+date ; nom seul à unicité stricte (couples, familles) ; aucune correspondance = écarté et
+compté. Rejouable, `--limit` pour un lot d'essai. Première simulation : 102 837 dates à
+poser sur 103 633 lignes (99,2 %), 5 ambigus.
+
 ## [0.23.0] — 2026-08-20
 
 ### Changé — `product --only=status` : le vide d'ADD fait foi, les couples du cliché 2019 sont retirés

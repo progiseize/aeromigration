@@ -4,3 +4,7 @@ data/
 
 # Rapports remis au client : documents de travail, jamais versionnés.
 rapports/
+
+# Données de reprise portables (liaisons, dates de naissance…) : données personnelles,
+# régénérables depuis la dernière photo des bases — jamais versionnées.
+migrationdata/
