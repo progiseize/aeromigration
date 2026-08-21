@@ -347,7 +347,7 @@ class MigrationInvoice extends AeroMigrationRunner
     {
         $prefix = $this->refExtPrefix;
 
-        $sql  = 'SELECT rowid, ref_ext FROM '.MAIN_DB_PREFIX.'product';
+        $sql  = 'SELECT rowid, ref_ext, label FROM '.MAIN_DB_PREFIX.'product';
         $sql .= ' WHERE entity IN ('.getEntity('product').')';
         $sql .= " AND ref_ext LIKE '".$this->db->escape($prefix)."%'";
 
@@ -361,11 +361,61 @@ class MigrationInvoice extends AeroMigrationRunner
             $key = $this->indexKey(substr((string) $obj->ref_ext, strlen($prefix)));
             if ($key !== '') {
                 $this->productBySage[$key] = (int) $obj->rowid;
+                // Le libellé sert à la fusion des annotations de série : une description qui
+                // ne fait que répéter le libellé du produit s'efface au profit des numéros,
+                // sans quoi le modèle PDF imprimerait le libellé deux fois.
+                $this->productLabelById[(int) $obj->rowid] = trim((string) $obj->label);
             }
         }
         $this->db->free($resql);
 
         return 1;
+    }
+
+    /** @var array<int,string> Libellés des produits repris, par rowid */
+    protected $productLabelById = array();
+
+    /**
+     * Motif des annotations de numéro de série saisies en ligne de texte par l'ancien ERP.
+     *
+     * Même motif que `scripts/merge_serial_lines.php`, qui rattrape l'existant : ces lignes
+     * n'ont pas vocation à devenir des lignes de facture — elles rejoignent la description de
+     * la ligne d'article qui les précède (décision du 21/08/2026, validée sur FA2526-015038).
+     */
+    const SERIAL_PATTERN = '/^(N°\s*SERIE|N°\s*DE\s*SERIE|NO\s*SERIE|SN\s|S\/N)/iu';
+
+    /** @var int Annotations de série fusionnées dans la description de leur article */
+    protected $serialMerged = 0;
+
+    /** @var int Doublons d'annotations absorbés — la source duplique fréquemment */
+    protected $serialDuplicates = 0;
+
+    /** @var int Annotations sans ligne d'article au-dessus : reprises en ligne, comme avant */
+    protected $serialOrphans = 0;
+
+    /**
+     * La ligne source est-elle une annotation de numéro de série ?
+     *
+     * Sans article, quantité nulle, montants nuls, et la description commence par le motif.
+     * Tout le reste des lignes libres (compositions, franco, mentions) garde son statut de
+     * ligne : on ne rattache que ce qui est sans ambiguïté.
+     *
+     * @param  stdClass $line Ligne source
+     * @return bool
+     */
+    protected function isSerialAnnotation($line)
+    {
+        if (trim((string) $line->AR_Ref) !== '') {
+            return false;
+        }
+        if ((float) $line->DL_Qte != 0.0) {
+            return false;
+        }
+        if ((float) $line->DL_MontantHT != 0.0 || (float) $line->DL_MontantTTC != 0.0) {
+            return false;
+        }
+
+        return (bool) preg_match(self::SERIAL_PATTERN, trim((string) $line->DL_Design));
     }
 
     /**
@@ -945,8 +995,56 @@ class MigrationInvoice extends AeroMigrationRunner
             return;
         }
 
+        // ── Pré-passe : les annotations de série rejoignent leur ligne d'article ──
+        //
+        // L'ancien ERP saisissait le numéro vendu en ligne de texte sous l'article, souvent en
+        // double. Chaque annotation est rattachée à la dernière ligne d'ARTICLE qui la précède
+        // (dédoublonnée) au lieu de devenir une ligne de facture à zéro. Sans ligne d'article
+        // au-dessus, elle reste une ligne, comme avant — on ne devine pas un rattachement.
+        $prepared = array();   // [['line' => stdClass, 'serials' => array<string>], …]
         foreach ($this->linesByDocument[$piece] as $line) {
+            if ($this->isSerialAnnotation($line)) {
+                $anchor = null;
+                for ($i = count($prepared) - 1; $i >= 0; $i--) {
+                    if (trim((string) $prepared[$i]['line']->AR_Ref) !== '') {
+                        $anchor = $i;
+                        break;
+                    }
+                }
+                if ($anchor !== null) {
+                    $text = trim((string) $line->DL_Design);
+                    if (in_array($text, $prepared[$anchor]['serials'], true)) {
+                        $this->serialDuplicates++;
+                    } else {
+                        $prepared[$anchor]['serials'][] = $text;
+                        $this->serialMerged++;
+                    }
+                    continue;
+                }
+                $this->serialOrphans++;
+            }
+            $prepared[] = array('line' => $line, 'serials' => array());
+        }
+
+        foreach ($prepared as $entry) {
+            $line = $entry['line'];
             $map = $this->mapLine($line, $isCreditNote);
+
+            if (!empty($entry['serials'])) {
+                // Une description qui ne fait que répéter le libellé du produit s'efface au
+                // profit des numéros : le modèle PDF imprime déjà le libellé, la garder le
+                // ferait sortir deux fois (constaté sur FA2526-015038).
+                $desc = trim((string) $map['desc']);
+                if ($map['productId'] > 0
+                    && isset($this->productLabelById[$map['productId']])
+                    && $desc === $this->productLabelById[$map['productId']]) {
+                    $desc = '';
+                }
+                foreach ($entry['serials'] as $t) {
+                    $desc .= ($desc !== '' ? "\n" : '').$t;
+                }
+                $map['desc'] = $desc;
+            }
 
             // Signature longue, mais il n'y a pas d'autre voie : le drapeau qui suspend le
             // recalcul des totaux est le trente-et-unième paramètre (facture.class.php:4218), et
@@ -1422,6 +1520,11 @@ class MigrationInvoice extends AeroMigrationRunner
         if ($this->ttcDerivedLines > 0) {
             $report[] = $this->ttcDerivedLines.' ligne(s) sans prix HT à la source (ère Sage native) :'
                 .' prix reconstruit des montants de ligne';
+        }
+        if ($this->serialMerged > 0 || $this->serialDuplicates > 0 || $this->serialOrphans > 0) {
+            $report[] = $this->serialMerged.' numéro(s) de série fusionné(s) dans la description de'
+                .' leur article ('.$this->serialDuplicates.' doublon(s) de la source absorbé(s), '
+                .$this->serialOrphans.' orphelin(s) repris en ligne)';
         }
         if ($this->missingProductLines > 0) {
             $report[] = $this->missingProductLines.' ligne(s) dont l\'article est introuvable : reprise(s) en texte libre — '

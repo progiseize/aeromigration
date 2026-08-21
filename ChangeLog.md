@@ -6,6 +6,30 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.25.0] — 2026-08-21
+
+### Ajouté — les numéros de série quittent les lignes de facture pour la description de leur article
+
+L'ancien ERP saisissait le numéro vendu en LIGNE DE TEXTE sous l'article — souvent en double,
+la source elle-même duplique (vérifié sur F990063289). La reprise, fidèle, en avait fait des
+lignes de facture à quantité nulle qui polluaient les PDF (« 0 / 0,00 / C0 » sous chaque
+casque, libellé parfois doublé).
+
+Le périmètre est volontairement étroit — lignes SANS article, quantité NULLE, montants NULS,
+description commençant par le motif série (« N° SERIE », « N°SERIE », « N° DE SERIE »,
+« NO SERIE », « SN  », « S/N ») : les autres lignes libres (compositions, franco, mentions de
+salon…) ne sont pas touchées, et une annotation sans ligne d'article au-dessus reste une
+ligne. Une description qui ne fait que répéter le libellé du produit s'efface au profit des
+numéros — le modèle PDF imprime déjà le libellé.
+
+- **`scripts/merge_serial_lines.php`** rattrape l'existant : texte annexé à la ligne d'article
+  précédente, doublons absorbés, annotation supprimée — en SQL direct (facture validée,
+  exception documentée), totaux garantis intacts (montants tous nuls, re-vérifiés ligne à
+  ligne). `--ref=` pour un test unitaire, simulation par défaut, rejouable. Mesuré : 2 754
+  factures, 4 517 numéros, 847 doublons, 126 orphelines. Validé sur pièce (FA2526-015038).
+- **`MigrationInvoice`** applique la même règle à la création : au jour J, le problème
+  n'existe plus. Compteurs au rapport.
+
 ## [0.24.0] — 2026-08-21
 
 ### Ajouté — `import_birthdays.php` : les dates de naissance de la boutique sur les contacts
