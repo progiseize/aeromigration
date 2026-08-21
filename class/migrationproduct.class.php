@@ -569,8 +569,13 @@ class MigrationProduct extends AeroMigrationRunner
                     : 0;
 
                 if ($avail <= 0 || $track <= 0) {
-                    $this->statusUnqualified++;
-                    return 'skipped';
+                    $current = $this->currentCouple($existingId);
+                    if ($current[0] === 0 && $current[1] === 0) {
+                        $this->statusUnqualified++;
+                        return 'skipped';
+                    }
+                    $this->statusEmptied++;
+                    return 'updated';
                 }
 
                 $current = $this->currentCouple($existingId);
@@ -869,17 +874,30 @@ class MigrationProduct extends AeroMigrationRunner
     /** @var int Couples déjà conformes */
     protected $statusAlreadyOk = 0;
 
-    /** @var int Articles que la surcouche ADD n'a jamais qualifiés (champs à zéro) : non touchés */
+    /** @var int Articles que la surcouche ADD n'a jamais qualifiés, et déjà vides côté Dolibarr */
     protected $statusUnqualified = 0;
+
+    /**
+     * Couples VIDÉS : ADD non qualifié mais Dolibarr portait un couple — l'héritage du cliché
+     * tableur de 2019, posé à la reprise initiale sans validation. Décision du 20/08/2026,
+     * prolongement direct de « Dolibarr doit refléter ADD » : le vide d'ADD se reflète aussi.
+     * Ces articles rejoignent le filtre « À qualifier » de la liste produit (aerotoolbox
+     * 1.17.0), et retrouveront un couple au fil de la qualification dans ADD.
+     *
+     * @var int
+     */
+    protected $statusEmptied = 0;
 
     /**
      * Aligne le couple disponibilité/suivi sur les champs numériques d'ADD.
      *
      * **La source fait foi** (décision client du 19/08/2026) : `disponibilite_origine` et
      * `suivi_origine` — l'origine brute, pas l'état de rupture — remplacent le couple Dolibarr.
-     * Les articles que la surcouche n'a jamais qualifiés (champs à zéro, vérifiés vides à
-     * l'écran ADD sur dix sondages) ne sont PAS touchés : le client les qualifie dans ADD
-     * (export `rapports/ARTICLES_A_QUALIFIER_ADD_*.csv`), et un passage suivant les reflétera.
+     * Depuis le 20/08/2026, le vide d'ADD fait foi lui aussi : un article jamais qualifié par
+     * la surcouche (champs à zéro) voit son couple Dolibarr VIDÉ — l'héritage du cliché 2019
+     * disparaît, et l'article rejoint le filtre « À qualifier » de la liste produit. Le client
+     * les qualifie dans ADD (export `rapports/ARTICLES_A_QUALIFIER_ADD_*.csv`), et un passage
+     * suivant reflète chaque qualification.
      *
      * L'écriture passe par `aerotb_status_write()`, l'unique porte d'aerotoolbox : elle impose
      * le suivi dérivé sur les produits composés, et aligne « En vente / En achat » sur la
@@ -901,8 +919,29 @@ class MigrationProduct extends AeroMigrationRunner
             : 0;
 
         if ($avail <= 0 || $track <= 0) {
-            $this->statusUnqualified++;
-            return false;
+            // ADD non qualifié : le vide fait foi. Un couple Dolibarr résiduel (cliché 2019)
+            // est retiré ; un couple déjà vide n'est pas retouché.
+            $current = $this->currentCouple((int) $product->id);
+            if ($current[0] === 0 && $current[1] === 0) {
+                $this->statusUnqualified++;
+                return false;
+            }
+
+            if (!function_exists('aerotb_status_write')) {
+                dol_include_once('/aerotoolbox/lib/aerotoolbox.lib.php');
+            }
+            if (!function_exists('aerotb_status_write')) {
+                throw new Exception('aerotoolbox est requis : aerotb_status_write() introuvable');
+            }
+
+            $pushInfo = null;
+            if (aerotb_status_write($this->db, (int) $product->id, 0, 0, $this->user, false, $pushInfo, false) < 0) {
+                throw new Exception('Vidage du couple refusé sur '.$product->ref);
+            }
+
+            $this->statusEmptied++;
+
+            return true;
         }
 
         $current = $this->currentCouple((int) $product->id);
@@ -1428,7 +1467,8 @@ class MigrationProduct extends AeroMigrationRunner
             }
         }
 
-        if ($this->statusAligned > 0 || $this->statusAlreadyOk > 0 || $this->statusUnqualified > 0) {
+        if ($this->statusAligned > 0 || $this->statusAlreadyOk > 0 || $this->statusUnqualified > 0
+            || $this->statusEmptied > 0) {
             if ($lines) {
                 $lines[] = '';
             }
@@ -1437,13 +1477,18 @@ class MigrationProduct extends AeroMigrationRunner
                 $lines[] = '  '.str_pad((string) $this->statusAligned, 6, ' ', STR_PAD_LEFT)
                     .'  couple(s) aligné(s) sur ADD — « En vente / En achat » suivent la combinaison';
             }
+            if ($this->statusEmptied > 0) {
+                $lines[] = '  '.str_pad((string) $this->statusEmptied, 6, ' ', STR_PAD_LEFT)
+                    .'  couple(s) VIDÉ(S) : ADD non qualifié, l\'héritage du cliché 2019 est retiré'
+                    .' — ces articles rejoignent le filtre « À qualifier »';
+            }
             if ($this->statusAlreadyOk > 0) {
                 $lines[] = '  '.str_pad((string) $this->statusAlreadyOk, 6, ' ', STR_PAD_LEFT)
                     .'  déjà conforme(s)';
             }
             if ($this->statusUnqualified > 0) {
                 $lines[] = '  '.str_pad((string) $this->statusUnqualified, 6, ' ', STR_PAD_LEFT)
-                    .'  jamais qualifié(s) par la surcouche ADD : non touché(s), à qualifier dans ADD'
+                    .'  jamais qualifié(s) par la surcouche ADD, déjà vide(s) : à qualifier dans ADD'
                     .' (rapports/ARTICLES_A_QUALIFIER_ADD_*.csv)';
             }
         }

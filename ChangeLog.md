@@ -6,6 +6,21 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.23.0] — 2026-08-20
+
+### Changé — `product --only=status` : le vide d'ADD fait foi, les couples du cliché 2019 sont retirés
+
+Jusqu'ici un article jamais qualifié par la surcouche ADD (champs numériques à zéro) n'était
+« pas touché » — et ~5 900 d'entre eux gardaient le couple hérité du cliché tableur de 2019,
+posé à la reprise initiale sans validation. Résultat : le filtre « À qualifier » de la liste
+produit (aerotoolbox 1.17.0) n'en montrait que 1 904 là où ADD en compte ~7 800.
+
+Décision du 20/08/2026, prolongement de « Dolibarr doit refléter ADD » : **ADD non qualifié →
+couple Dolibarr VIDÉ** (par la porte `aerotb_status_write`, qui accepte le vide). « En vente /
+En achat » ne bougent pas — aucune combinaison ne correspond au vide, le no-op est celui du
+coeur — et ces articles sortent du périmètre de poussée boutique, comme tout couple absent.
+Un article déjà vide n'est pas retouché ; la qualification dans ADD reste le chemin du retour.
+
 ## [0.22.0] — 2026-08-20
 
 ### Ajouté — `renumber_customer_orders.php` : la série CO sur les commandes clients
