@@ -6,6 +6,27 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.26.0] — 2026-08-21
+
+### Ajouté — `import_consignes.php` : garantie, consignes et notes produits arbitrées par le client
+
+L'ancien ERP mélangeait dans un texte libre les durées de garantie, les consignes de
+préparation/emballage/vente et des informations d'approvisionnement datées. Le client a
+arbitré chaque texte (fichier `data/2608_consignes.xlsx`, 311 lignes) : nature retenue, durée
+en mois, texte reformulé à conserver, ou suppression pure (92 lignes sans intérêt).
+
+- **`migrationdata/consignes_produits_*.csv`** — la forme propre de l'arbitrage, clés
+  portables uniquement (`ref_add;champ;garantie_mois;texte`). Les SUPPRESSION n'y figurent
+  pas : ne rien remonter EST la décision. 217 lignes.
+- **`scripts/import_consignes.php`** — pose chaque valeur sur le produit résolu par `ref_ext`
+  « SAGE: » en référence CANONIQUE (Excel a mangé les zéros de tête : « 00175 » y devient
+  « 175 » — même appariement que le catalogue client) : `garantie` → extrafields
+  `aerotb_warranty` + `aerotb_warranty_months` ; `prep`/`pack`/`vente` → extrafields
+  `aerotb_*_notes` d'aerotoolbox ; `note` → `note_public` (le bloc « Notes » de la fiche).
+  Une valeur conforme n'est pas réécrite (rejouable), une valeur différente est REMPLACÉE —
+  l'arbitrage fait foi — mais comptée et listée. Simulation par défaut, `--limit`, `--file`.
+  Local : 217/217 résolues, 0 écart, second passage 100 % « déjà à jour ».
+
 ## [0.25.0] — 2026-08-21
 
 ### Ajouté — les numéros de série quittent les lignes de facture pour la description de leur article

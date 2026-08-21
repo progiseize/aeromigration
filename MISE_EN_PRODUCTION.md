@@ -96,6 +96,12 @@ Points d'attention hérités du test :
   en ignorant ce qui ne s'expédie jamais (texte libre, article « Transport », pseudo-articles
   `PORT*`/`RETRAIT*`). Ni le coeur ni `shipment` ne peuvent le faire seuls — voir le
   ChangeLog 0.19.1. Les livraisons partielles sont listées, jamais forcées.
+- **Après les reprises, les imports à fichier** (dossier `migrationdata/`, jamais versionné —
+  déposer les CSV sur le serveur d'abord), chacun en simulation puis `--confirm` :
+  `import_birthdays.php` (dates de naissance boutique → contacts des particuliers ;
+  **régénérer l'extraction depuis la dernière photo PrestaShop** avant le jour J, comme les
+  liaisons) et `import_consignes.php` (garantie, consignes et notes produits arbitrées par le
+  client — fichier figé issu de `data/2608_consignes.xlsx`, aucun rafraîchissement à prévoir).
 
 ### 4. Aligner les produits composés
 
