@@ -44,7 +44,7 @@ php migrate.php reception      réceptions fournisseur → adossées aux lignes 
 php migrate.php shipment       expéditions clients → adossées aux lignes de commande
 php migrate.php proposal       devis clients → statuts de la grille client
 php migrate.php pricelevel     catégorie tarifaire des clients   ⚠ Prestasync coupé
-php migrate.php customerprice  tarifs de vente, les huit niveaux ⚠ Prestasync coupé
+php migrate.php customerprice  tarifs de vente, les sept niveaux ⚠ Prestasync coupé
 php migrate.php productkit     articles composés → liaisons de kit
 ```
 
@@ -314,33 +314,56 @@ Ce seuil n'est pas une commodité : `llx_product.price` est arrondi au centime l
 `llx_product_price` conserve huit décimales. Comparer strictement ferait rejouer huit lignes
 d'historique par article à chaque passage, sur des écarts de l'ordre du millionième d'euro.
 
-## Les tarifs de vente : huit niveaux, obligatoirement remplis
+## Les tarifs de vente : sept niveaux, obligatoirement remplis
 
 Le multi-prix de Dolibarr n'a **aucun repli**. `Product::fetch()` pose
 `multiprices[$i] = null` quand un niveau n'a pas de ligne, et `getSellPrice()` l'utilise tel
 quel : un client dont la catégorie n'a pas de prix pour l'article se voit facturer **0,00 €**,
 sans le moindre avertissement.
 
-`customerprice` écrit donc les huit niveaux pour tous les articles, y compris ceux qui n'ont
+`customerprice` écrit donc les sept niveaux pour tous les articles, y compris ceux qui n'ont
 aucune dérogation — ils reçoivent alors le prix de la fiche article. D'où le volume :
-environ 127 000 lignes de prix pour 15 900 articles.
+environ 111 000 lignes de prix pour 15 900 articles.
 
-**Les deux premières catégories sont permutées.** Dans l'ancien ERP, la 1 est le comptoir et
-la 2 le site ; en cible, le tarif du site devient le **niveau 1**. La raison tient à une
-chaîne qu'il faut connaître avant d'y toucher : le trigger `PRODUCT_PRICE_MODIFY`
-d'`aerotoolbox` recopie le niveau 1 dans `llx_product.price`, et Prestasync publie ce champ
-vers la boutique. Le niveau 1 est donc **le prix que voit le client sur PrestaShop**. Il se
-trouve que c'est aussi le tarif de 146 388 clients sur 157 189 : les deux raisons désignent
-le même niveau.
+**Les deux premières catégories fusionnent dans le niveau 1.** Dans l'ancien ERP, la 1 est
+le comptoir et la 2 le site ; en cible, les deux partagent le **niveau 1** et les six autres
+descendent d'un cran (décision client, 0.28.0 — le prix comptoir n'existe plus, la caisse
+vendant déjà au tarif par défaut). Ancrer le tarif du site au niveau 1 tient à une chaîne
+qu'il faut connaître avant d'y toucher : le trigger `PRODUCT_PRICE_MODIFY` d'`aerotoolbox`
+recopie le niveau 1 dans `llx_product.price`, et Prestasync publie ce champ vers la
+boutique. Le niveau 1 est donc **le prix que voit le client sur PrestaShop** — et le tarif
+de la quasi-totalité du fichier client. Les tarifs saisis en catégorie 1 ne nourrissent
+plus aucun niveau : leurs 5 005 dérogations sont abandonnées, chiffrage à l'appui (voir T9
+dans [ANOMALIES.md](ANOMALIES.md)).
 
 La correspondance est portée par `aeromigration_price_level()`, en un seul endroit.
-`MigrationThirdparty` et `MigrationPriceLevel` l'appellent tous les deux — les faire diverger
-reviendrait à facturer une partie du fichier client au mauvais tarif, sans que rien ne
-le signale.
+`MigrationThirdparty`, `MigrationPriceLevel` et `MigrationCustomerPrice` l'appellent tous —
+les faire diverger reviendrait à facturer une partie du fichier client au mauvais tarif,
+sans que rien ne le signale.
 
-### Les niveaux 2 à 8 suivent le niveau 1
+### Passer une base déjà tarifée à sept niveaux
 
-Un prix figé se démode : au premier changement du tarif de base, les sept autres niveaux
+`scripts/merge_price_levels.php` fait, une fois, ce que les reprises ne peuvent pas faire :
+les constantes (`PRODUIT_MULTIPRICES_LIMIT` 8 → 7, libellés décalés, LABEL8 supprimé), le
+décalage des tiers nés dans la boutique — invisibles de `pricelevel`, qui ne visite que la
+source — et la suppression des lignes du niveau 8, devenues illisibles. Puis les scripts
+ordinaires, d'affilée :
+
+```
+php scripts/merge_price_levels.php --confirm
+php scripts/migrate.php pricelevel --confirm
+php scripts/migrate.php customerprice --confirm
+```
+
+**Sans purge** : le niveau 1 ne change pas d'un centime, `llx_product.price` non plus — pas
+de fenêtre à zéro euro pour la boutique. Enchaîner les trois tout de même : entre
+`pricelevel` et la fin de `customerprice`, les clients à catégorie et la grille ne se
+correspondent pas encore. `customerprice` refuse d'ailleurs de démarrer tant que la limite
+ne vaut pas exactement 7.
+
+### Les niveaux 2 à 7 suivent le niveau 1
+
+Un prix figé se démode : au premier changement du tarif de base, les six autres niveaux
 restent en arrière et la politique commerciale se perd. `customerprice` pose donc, en même
 temps que chaque prix, la règle de pilotage d'`aerotoolbox` — le drapeau
 `aerotb_price_follow` et l'écart au niveau 1 dans `aerotb_price_pct`. Le prix écrit ne change
@@ -368,15 +391,16 @@ nouveau passage, qui ne retouchera aucun prix.
 **Purge ou non, la synchronisation doit être coupée avant `pricelevel` et rallumée après
 `customerprice`.** Trois raisons distinctes, dont deux subsistent même sans purge :
 
-**Les prix changent article par article.** `customerprice` écrit huit niveaux pour chacun des
+**Les prix changent article par article.** `customerprice` écrit sept niveaux pour chacun des
 15 908 articles, et le trigger `PRODUCT_PRICE_MODIFY` réaligne `llx_product.price` à chaque
 passage. Pendant le quart d'heure que dure le script, la boutique reçoit des prix
 intermédiaires — certains articles à jour, d'autres non.
 
 **Entre les deux scripts, les clients et les tarifs ne se correspondent pas.** `pricelevel`
-bascule 146 388 clients du niveau 2 au niveau 1 ; tant que `customerprice` n'a pas rempli ce
-niveau, ces clients n'ont plus de tarif. Un client sans prix se voit facturer zéro — voir plus
-haut, un niveau vide ne connaît aucun repli.
+range chaque client sur son niveau cible ; tant que `customerprice` n'a pas rempli la grille
+correspondante, un client déplacé vise un niveau qui porte encore l'ancien tarif — voire
+aucun. Un client sans prix se voit facturer zéro — voir plus haut, un niveau vide ne connaît
+aucun repli.
 
 **Et si vous purgez**, `llx_product.price` vaut 0 pour tout le catalogue repris entre la purge
 et la fin du rejeu : la boutique publierait un catalogue gratuit.
@@ -476,6 +500,7 @@ aeromigration/
     ├── align_invoices_add.php   applique la règle « ADD fait foi » au parc de factures
     ├── relink_prestasync.php    rétablit les liaisons boutique après reprise sur base neuve
     ├── sync_kit_tracking.php    aligne les produits composés sur leurs composants
+    ├── merge_price_levels.php   bascule la grille de huit à sept niveaux (fusion comptoir/site)
     ├── fix_invoice_signs.php    correctif ponctuel, voir ci-dessous
     └── delete_invoices_cancelled_orders.php   remplacé par align_invoices_add.php
 ```

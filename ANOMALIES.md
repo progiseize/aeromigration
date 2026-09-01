@@ -1558,6 +1558,7 @@ pourquoi évite de vouloir les rétablir.
 | T5 | Tarifs d'agence, nominatifs, paliers | 512 lignes | Écartés, comptés |
 | T6 | Jusqu'à seize lignes pour un même couple | 940 couples | Départage documenté |
 | T7 | Remises de −30 % à 100 % | 15 valeurs | Bornées et signalées |
+| T9 | La catégorie Comptoir fusionne dans le site | 5 005 dérogations | Abandonnées, chiffrées (−1 689 € sur 2026) |
 
 ### T1. La catégorie 0 n'est pas le prix public
 
@@ -1673,6 +1674,26 @@ multi-prix, lui, exige une valeur figée. 22,20 € moins 9 % donne 20,202 € �
 grille tarifaire étant éditable à l'écran, une valeur non arrondie y serait « corrigée » au
 premier passage, créant une divergence que rien ne signalerait. Les prix fixes, eux, ne sont
 jamais retouchés.
+
+### T9. La catégorie Comptoir fusionne dans le tarif du site (0.28.0)
+
+Demande client du 21/08/2026 : « le prix comptoir n'existe plus vraiment ». Le constat
+technique le confirme — la caisse vend déjà au tarif par défaut (client TakePOS générique
+sans niveau, repli niveau 1) et la boutique publie `llx_product.price`. La grille passe de
+huit à sept niveaux : catégories 1 et 2 → niveau 1, les six autres décalées d'un cran.
+
+**Ce qui disparaît.** Les tarifs saisis en catégorie 1 ne nourrissent plus aucun niveau —
+5 174 lignes valides au 30/08, soit **5 005 dérogations** (prix comptoir ≠ site, 4 982 à la
+baisse). Chiffrage remis au client (`rapports/derogations_comptoir_20260830.csv`) : 1 820
+sur des produits encore en vente, mais **352 seulement vendues au comptoir en 2026**
+(683 unités), pour **−1 689 €** d'écart cumulé face au tarif site. L'abandon est quasi
+indolore — et irréversible côté Dolibarr, la reprise ne relisant plus ces lignes.
+
+**Un SQL direct assumé.** `scripts/merge_price_levels.php` supprime les lignes de prix du
+niveau 8 (≈ 15 922) : illisibles dès que la limite vaut 7 — `Product::fetch()` ne lit
+jamais au-delà — et le coeur n'offre aucune méthode pour retirer un niveau entier. Remise
+en cohérence d'environnement, même statut que la purge de `customerprice`. Le même script
+décale les tiers nés dans la boutique (~124), que `pricelevel` ne visite pas.
 
 
 ## Tiers (`f_comptet`)

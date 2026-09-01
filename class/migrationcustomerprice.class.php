@@ -18,9 +18,9 @@
  * `getSellPrice()` l'utilise **sans repli** (ligne 2469). Un client dont la catégorie n'a
  * pas de prix pour l'article se voit donc facturer 0,00 €, sans le moindre avertissement.
  *
- * Ce script écrit par conséquent **les huit niveaux pour tous les articles**, y compris
+ * Ce script écrit par conséquent **les sept niveaux pour tous les articles**, y compris
  * ceux qui n'ont aucune dérogation : ils reçoivent alors le prix de base. C'est ce qui
- * explique le volume — environ 127 000 lignes de prix pour 15 900 articles.
+ * explique le volume — environ 111 000 lignes de prix pour 15 900 articles.
  *
  * ## Ce que la source dit, et ce qu'elle ne dit pas
  *
@@ -62,9 +62,9 @@
  * passage n'écrit rien et n'ajoute aucune ligne d'historique. `loadMigratedIndex()` est
  * surchargée pour renvoyer un index vide, faute de quoi le socle sauterait toutes les lignes.
  *
- * ## Les niveaux 2 à 8 sont pilotés par le niveau 1
+ * ## Les niveaux 2 à 7 sont pilotés par le niveau 1
  *
- * Un prix figé se démode : au premier changement du tarif de base, les sept autres niveaux
+ * Un prix figé se démode : au premier changement du tarif de base, les six autres niveaux
  * restent en arrière et la politique commerciale se perd — c'est exactement ce qui se passait
  * dans l'ancien ERP, où la remise était réappliquée à la main article par article.
  *
@@ -87,8 +87,9 @@
  * un passage sur un catalogue déjà tarifé ne touche aucun prix et se contente de brancher le
  * pilotage.
  *
- * @see aeromigration_price_level() pour la correspondance des catégories, et la raison
- *      pour laquelle les deux premières sont permutées.
+ * @see aeromigration_price_level() pour la correspondance des catégories — les deux
+ *      premières (comptoir et site) sont fusionnées dans le niveau 1 depuis la 0.28.0,
+ *      et les tarifs de la catégorie 1 ne nourrissent plus aucun niveau.
  * @see custom/aerotoolbox/lib/aeroprice.lib.php pour le mécanisme de pilotage lui-même.
  */
 
@@ -108,13 +109,20 @@ class MigrationCustomerPrice extends AeroMigrationRunner
      *
      * Le seuil est indispensable et n'a rien d'arbitraire : `llx_product.price` est arrondi
      * au centime là où `llx_product_price` conserve huit décimales. Une comparaison stricte
-     * ferait rejouer huit lignes d'historique par article à chaque passage, sur des écarts
+     * ferait rejouer sept lignes d'historique par article à chaque passage, sur des écarts
      * de l'ordre du millionième d'euro.
      */
     const ROUNDING = 0.005;
 
-    /** Nombre de niveaux de prix gérés. */
-    const LEVELS = 8;
+    /**
+     * Nombre de niveaux de prix gérés.
+     *
+     * Sept depuis la fusion comptoir/site (0.28.0) : les catégories source 1 et 2
+     * partagent le niveau 1, les six autres descendent d'un cran. Les lectures de la
+     * table des tarifs se bornent aux catégories qui nourrissent un niveau — voir
+     * sourceCategories().
+     */
+    const LEVELS = 7;
 
     /**
      * Écart en deçà duquel deux taux de remise sont tenus pour identiques.
@@ -136,7 +144,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     /**
      * Table source : la fiche article, et non la table des tarifs.
      *
-     * Le script raisonne par article et calcule ses huit niveaux d'un bloc. Parcourir les
+     * Le script raisonne par article et calcule ses sept niveaux d'un bloc. Parcourir les
      * 27 591 lignes de tarif obligerait au contraire à revenir plusieurs fois sur le même
      * article, sans jamais savoir quand ses niveaux sont tous posés — et laisserait sans
      * prix les 10 000 articles qui n'ont aucune dérogation, donc facturés zéro.
@@ -260,7 +268,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     }
 
     /**
-     * Vérifie que la cible est configurée pour recevoir les huit niveaux.
+     * Vérifie que la cible est configurée pour recevoir les sept niveaux.
      *
      * Écrire un niveau au-delà de `PRODUIT_MULTIPRICES_LIMIT` ne provoque aucune erreur :
      * la ligne est bien insérée, mais `fetch()` ne la relit jamais et l'écran ne l'affiche
@@ -279,12 +287,17 @@ class MigrationCustomerPrice extends AeroMigrationRunner
             return -1;
         }
 
+        // L'égalité est exigée, pas un minimum. En deçà, les niveaux écrits au-delà de la
+        // limite ne seraient jamais relus ; au-delà — une base restée à huit niveaux —, le
+        // niveau excédentaire afficherait des prix que ce script ne maintient plus (les
+        // anciennes lignes FFA du niveau 8, typiquement). `scripts/merge_price_levels.php`
+        // pose la bonne valeur et nettoie ces lignes.
         $limit = getDolGlobalInt('PRODUIT_MULTIPRICES_LIMIT');
-        if ($limit < self::LEVELS) {
+        if ($limit !== self::LEVELS) {
             $this->errors[] = array(
                 'key'     => '',
-                'message' => 'PRODUIT_MULTIPRICES_LIMIT vaut '.$limit.' : les niveaux au-delà seraient écrits'
-                    .' sans jamais être relus. Portez-la à '.self::LEVELS.'.',
+                'message' => 'PRODUIT_MULTIPRICES_LIMIT vaut '.$limit.' au lieu de '.self::LEVELS
+                    .' : passez « scripts/merge_price_levels.php » (fusion comptoir/site) avant ce script.',
             );
             return -1;
         }
@@ -330,7 +343,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
      *
      * La TVA est celle du produit cible, et non un recalcul depuis la famille : elle est
      * repassée telle quelle à `updatePrice()`, qui l'écrirait sinon à sa valeur par défaut.
-     * Sans `PRODUIT_MULTIPRICES_USE_VAT_PER_LEVEL`, elle est commune aux huit niveaux.
+     * Sans `PRODUIT_MULTIPRICES_USE_VAT_PER_LEVEL`, elle est commune aux sept niveaux.
      *
      * @return int 1 si OK, -1 en cas d'erreur SQL
      */
@@ -370,6 +383,30 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     }
 
     /**
+     * Catégories source qui nourrissent au moins un niveau cible.
+     *
+     * Depuis la fusion comptoir/site, la correspondance n'est plus bijective : la
+     * catégorie 1 (comptoir) ne nourrit plus aucun niveau, le niveau 1 lisant son tarif
+     * en catégorie 2 (site). Les lectures de `z_tarifparticulier` se bornent à ces
+     * catégories-là — charger la catégorie 1 stockerait des lignes que computeLevel()
+     * ne consulterait jamais.
+     *
+     * @return array<int,int> Catégories source, indexées par elles-mêmes
+     */
+    protected function sourceCategories()
+    {
+        $cats = array();
+        for ($level = 1; $level <= self::LEVELS; $level++) {
+            $cat = aeromigration_price_category($level);
+            if ($cat > 0) {
+                $cats[$cat] = $cat;
+            }
+        }
+
+        return $cats;
+    }
+
+    /**
      * Charge la ligne de tarif retenue pour chaque couple (article, catégorie).
      *
      * ## Ce qui est écarté, et pourquoi
@@ -397,7 +434,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
 
         $sql  = 'SELECT AR_Ref, N_CatTarif, DE_No, AR_PrixVen, AR_PrixTTC, remise, cbMarq';
         $sql .= ' FROM '.$this->src('z_tarifparticulier');
-        $sql .= ' WHERE N_CatTarif BETWEEN 1 AND '.self::LEVELS;
+        $sql .= ' WHERE N_CatTarif IN ('.implode(', ', $this->sourceCategories()).')';
         $sql .= "   AND TRIM(COALESCE(AR_Ref, '')) <> ''";
         $sql .= '   AND AG_No1 = 0';
         $sql .= "   AND COALESCE(TRIM(CT_Num), '') = ''";
@@ -443,6 +480,10 @@ class MigrationCustomerPrice extends AeroMigrationRunner
         $now = $this->db->idate($this->resolveDate());
 
         $motifs = array(
+            // Depuis la fusion comptoir/site (0.28.0), la catégorie 1 ne nourrit plus
+            // aucun niveau : ses dérogations disparaissent, et le rapport doit le dire
+            // — chiffrage remis au client le 30/08/2026, voir T9 dans ANOMALIES.md.
+            'tarifs de la catégorie Comptoir, fusionnée dans le tarif du site' => 'N_CatTarif = 1',
             'tarifs propres à une agence'          => 'AG_No1 <> 0',
             'tarifs nominatifs, par client'        => "COALESCE(TRIM(CT_Num), '') <> ''",
             'paliers de quantité'                  => 'AR_aPartirDe > 1',
@@ -485,7 +526,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
         $now = $this->db->idate($this->resolveDate());
 
         $sql  = 'SELECT N_CatTarif, CL_No, remise FROM '.$this->src('z_tarifparticulier');
-        $sql .= ' WHERE N_CatTarif BETWEEN 1 AND '.self::LEVELS;
+        $sql .= ' WHERE N_CatTarif IN ('.implode(', ', $this->sourceCategories()).')';
         $sql .= "   AND COALESCE(TRIM(AR_Ref), '') = ''";
         $sql .= '   AND CL_No > 0 AND AG_No1 = 0';
         $sql .= "   AND AR_DateDebut <= '".$now."' AND AR_DateFin >= '".$now."'";
@@ -520,8 +561,8 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     /**
      * Charge les prix déjà en base, un par couple (produit, niveau).
      *
-     * Le coeur relit chaque niveau par une requête distincte, soit huit par article — plus
-     * de cent vingt mille pour le catalogue. Une seule lecture ordonnée suffit : les lignes
+     * Le coeur relit chaque niveau par une requête distincte, soit sept par article — plus
+     * de cent dix mille pour le catalogue. Une seule lecture ordonnée suffit : les lignes
      * étant parcourues de la plus ancienne à la plus récente, la dernière écrase les
      * précédentes et c'est bien elle qui reste, exactement comme le
      * `ORDER BY date_price DESC, rowid DESC LIMIT 1` de `Product::fetch()`.
@@ -589,7 +630,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     }
 
     /**
-     * Nombre d'articles dont les huit niveaux sont posés.
+     * Nombre d'articles dont les sept niveaux sont posés.
      *
      * Le comptage ne porte pas sur les lignes — un article peut en avoir plusieurs par
      * niveau, l'historique n'étant jamais purgé par le coeur — mais sur les articles dont
@@ -625,7 +666,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
      * La base de saisie de la source est conservée telle quelle plutôt que ramenée au hors
      * taxes : une remise en pourcentage est invariante par changement de base tant que la
      * TVA est commune aux niveaux, ce qui est le cas ici. Convertir ferait courir un écart
-     * d'arrondi sur chacun des huit niveaux, sans rien apporter.
+     * d'arrondi sur chacun des sept niveaux, sans rien apporter.
      *
      * @param stdClass $row Ligne de f_article
      * @return array{price:float,base:string,origin:string}
@@ -734,7 +775,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     }
 
     /**
-     * Calcule les huit niveaux d'un article.
+     * Calcule les sept niveaux d'un article.
      *
      * @param stdClass $row Ligne de f_article
      * @return array<int,array{price:float,base:string,origin:string}>
@@ -790,9 +831,9 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     }
 
     /**
-     * Détermine la règle de pilotage de chacun des huit niveaux.
+     * Détermine la règle de pilotage de chacun des sept niveaux.
      *
-     * Le niveau 1 est la référence et ne se suit pas lui-même. Les sept autres la suivent tous,
+     * Le niveau 1 est la référence et ne se suit pas lui-même. Les six autres la suivent tous,
      * y compris ceux dont le prix lui est identique : un niveau aligné sur le tarif de base doit
      * le rester quand celui-ci bouge, et c'est précisément ce qu'un taux nul exprime.
      *
@@ -857,7 +898,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
     }
 
     /**
-     * Écrit les huit niveaux de l'article, en ne touchant que ceux qui changent.
+     * Écrit les sept niveaux de l'article, en ne touchant que ceux qui changent.
      *
      * @param stdClass $row        Ligne de f_article
      * @param int      $existingId Toujours 0, l'index étant vide
@@ -923,7 +964,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
 
         $object = new Product($this->db);
         // Les prix sont déjà en mémoire et les expressions de prix ne sont pas utilisées :
-        // les charger coûterait huit requêtes par article, pour rien.
+        // les charger coûterait sept requêtes par article, pour rien.
         if ($object->fetch($productId, '', '', '', 1, 1, 1) <= 0) {
             throw new Exception('Article introuvable en cible (rowid '.$productId.') : '.$this->objectErrors($object));
         }
@@ -1020,7 +1061,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
      *
      * @param stdClass $row Ligne de f_article
      * @return void
-     * @throws Exception Si le calcul ne produit pas huit niveaux
+     * @throws Exception Si le calcul ne produit pas sept niveaux
      */
     protected function validateRow($row)
     {
@@ -1227,7 +1268,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
         }
         if ($this->withoutBasePrice > 0) {
             $lines[] = '  '.str_pad((string) $this->withoutBasePrice, 10, ' ', STR_PAD_LEFT)
-                .'  articles sans prix dans la source : leurs huit niveaux sont à zéro';
+                .'  articles sans prix dans la source : leurs sept niveaux sont à zéro';
         }
         if ($this->cappedDiscounts > 0) {
             $lines[] = '  '.str_pad((string) $this->cappedDiscounts, 10, ' ', STR_PAD_LEFT)

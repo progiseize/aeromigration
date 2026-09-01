@@ -193,7 +193,7 @@ function aeromigrationGetScripts()
             'class' => 'MigrationPriceLevel',
             'file'  => '/aeromigration/class/migrationpricelevel.class.php',
         ),
-        // Dépend des articles. Écrit les huit niveaux de prix de vente, dont le premier :
+        // Dépend des articles. Écrit les sept niveaux de prix de vente, dont le premier :
         // c'est lui, et non « product », qui fait autorité sur la tarification client.
         array(
             'code'  => 'customerprice',
@@ -216,27 +216,33 @@ function aeromigrationGetScripts()
  * Convertit une catégorie tarifaire de l'ancien ERP en niveau de prix Dolibarr.
  *
  * ------------------------------------------------------------------------------
- * LES CATÉGORIES 1 ET 2 SONT INVERSÉES, ET CE N'EST PAS UN DÉTAIL.
+ * LES CATÉGORIES 1 ET 2 FUSIONNENT DANS LE NIVEAU 1 — LA GRILLE A SEPT NIVEAUX.
  * ------------------------------------------------------------------------------
  *
- * Dans l'ancien ERP, la catégorie 1 est le comptoir et la catégorie 2 le site. En cible,
- * les deux sont permutées : le tarif du site devient le **niveau 1**.
+ * Dans l'ancien ERP, la catégorie 1 est le comptoir et la catégorie 2 le site. La
+ * correspondance a changé deux fois, et l'histoire explique la table :
  *
- * La raison tient à une chaîne de dépendances qu'il faut avoir en tête avant de toucher
- * à cette table :
+ * - **0.12.0, l'inversion** : le tarif du site devient le niveau 1. Le trigger
+ *   `PRODUCT_PRICE_MODIFY` d'aerotoolbox recopie le prix du niveau 1 dans
+ *   `llx_product.price` — le coeur, lui, y laisse le dernier niveau écrit — et Prestasync
+ *   publie ce champ : **le niveau 1 est le prix que voit le client sur PrestaShop**, et
+ *   c'est aussi le repli de `Product::getSellPrice()` pour un tiers sans catégorie.
  *
- * - le trigger `PRODUCT_PRICE_MODIFY` d'aerotoolbox recopie le prix du niveau 1 dans
- *   `llx_product.price` — le coeur, lui, y laisse le dernier niveau écrit ;
- * - Prestasync publie `llx_product.price` vers la boutique ;
- * - donc **le niveau 1 est le prix que voit le client sur PrestaShop**.
+ * - **0.28.0, la fusion** : le prix comptoir n'existe plus (décision client du 21/08/2026,
+ *   chiffrage du 30/08 — 5 005 dérogations abandonnées, −1 689 € d'effet sur les ventes
+ *   2026, voir T9 dans ANOMALIES.md). La caisse vendait déjà au tarif par défaut : le
+ *   client générique TakePOS n'a pas de niveau et retombe sur le niveau 1. La catégorie 1
+ *   rejoint donc le niveau 1, et les six catégories suivantes descendent d'un cran.
  *
- * Le tarif du site étant celui de 146 388 clients sur 157 189, il est aussi le tarif par
- * défaut : `Product::getSellPrice()` retombe sur `llx_product.price` pour un tiers sans
- * catégorie. Les deux raisons désignent le même niveau.
+ * La table n'est **plus bijective** : les tarifs saisis en catégorie 1 dans
+ * `z_tarifparticulier` ne nourrissent plus aucun niveau — le niveau 1 lit les siens en
+ * catégorie 2, voir aeromigration_price_category().
  *
- * Cette fonction est **la seule autorité** sur la correspondance. `MigrationThirdparty` et
- * `MigrationPriceLevel` l'appellent tous deux : les faire diverger reviendrait à facturer
- * une partie du fichier client au mauvais tarif, sans que rien ne le signale.
+ * Cette fonction est **la seule autorité** sur la correspondance. `MigrationThirdparty`,
+ * `MigrationPriceLevel` et `MigrationCustomerPrice` l'appellent tous : les faire diverger
+ * reviendrait à facturer une partie du fichier client au mauvais tarif, sans que rien ne
+ * le signale. La bascule d'une base déjà tarifée est portée par
+ * `scripts/merge_price_levels.php` (constantes, tiers hors reprise, niveau 8).
  *
  * @param int $catTarif Catégorie tarifaire source (N_CatTarif de f_comptet)
  * @return int          Niveau de prix Dolibarr, 0 si la catégorie est absente ou inconnue
@@ -244,14 +250,14 @@ function aeromigrationGetScripts()
 function aeromigration_price_level($catTarif)
 {
     $map = array(
-        2 => 1,   // site               → Défaut / Site
-        1 => 2,   // Comptoir           → Comptoir
-        3 => 3,   // Aéro-Clubs
-        4 => 4,   // Revendeur
-        5 => 5,   // Airbus
-        6 => 6,   // Ecole de pilotage
-        7 => 7,   // Marche Enac
-        8 => 8,   // FFA
+        2 => 1,   // site               → Défaut (fusion comptoir/site)
+        1 => 1,   // Comptoir           → Défaut (fusion comptoir/site)
+        3 => 2,   // Aéro-Clubs
+        4 => 3,   // Revendeur
+        5 => 4,   // Airbus
+        6 => 5,   // Ecole de pilotage
+        7 => 6,   // Marche Enac
+        8 => 7,   // FFA
     );
 
     $catTarif = (int) $catTarif;
@@ -266,7 +272,14 @@ function aeromigration_price_level($catTarif)
  * ne puisse être modifiée seule. Sert à `MigrationCustomerPrice`, qui raisonne par niveau
  * cible et doit retrouver la catégorie où lire le tarif.
  *
- * @param int $level Niveau de prix Dolibarr (1 à 8)
+ * Depuis la fusion comptoir/site, la correspondance directe n'est plus bijective : les
+ * catégories 1 et 2 pointent toutes deux le niveau 1. La déduction parcourt les catégories
+ * en ordre CROISSANT et la dernière l'emporte — le niveau 1 lit donc son tarif en
+ * **catégorie 2 (site)**, et les tarifs de la catégorie 1 (comptoir) ne nourrissent plus
+ * aucun niveau. Ce n'est pas un accident d'itération, c'est la décision : voir le bloc de
+ * aeromigration_price_level().
+ *
+ * @param int $level Niveau de prix Dolibarr (1 à 7)
  * @return int       Catégorie tarifaire source, 0 si le niveau n'en a pas
  */
 function aeromigration_price_category($level)

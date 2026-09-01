@@ -79,7 +79,10 @@ Points d'attention hérités du test :
 
 - **`pricelevel` et `customerprice` vont ensemble**, et Prestasync doit être suspendu sur
   toute la fenêtre : entre la purge des tarifs et la fin du rejeu, `llx_product.price` vaut
-  zéro.
+  zéro. **La grille est à SEPT niveaux depuis la 0.28.0** (fusion comptoir/site) :
+  `customerprice` refuse de démarrer si `PRODUIT_MULTIPRICES_LIMIT` ne vaut pas exactement
+  7 — au besoin, passer `scripts/merge_price_levels.php --confirm` d'abord (rejouable : sur
+  une base déjà basculée, il ne décale plus rien).
 - Les écartés **attendus** de `invoice` : documents sans aucune ligne (≈ 380). Les ≈ 311
   factures dont le tiers a disparu de `f_comptet` lui-même sont **reprises** depuis la 0.16.1,
   rattachées au tiers générique « Clients Anonymisés » (décision client du 19/08/2026) —

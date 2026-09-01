@@ -953,10 +953,11 @@ class MigrationThirdparty extends AeroMigrationRunner
      * ajouterait une ligne d'historique sans objet.
      *
      * ATTENTION : la catégorie source n'est PAS le niveau Dolibarr. Les deux premières
-     * sont permutées, le tarif du site devenant le niveau 1 — voir
-     * aeromigration_price_level(), qui porte la conversion et sa justification. Recopier
-     * N_CatTarif tel quel, comme le faisait la première version de ce script, facture au
-     * tarif comptoir les 146 388 clients de la boutique, sans qu'aucune erreur ne le dise.
+     * (comptoir et site) sont fusionnées dans le niveau 1 et les six autres décalées d'un
+     * cran — voir aeromigration_price_level(), qui porte la conversion et sa
+     * justification. Recopier N_CatTarif tel quel, comme le faisait la première version
+     * de ce script, facturerait une grande partie du fichier client au mauvais tarif,
+     * sans qu'aucune erreur ne le dise.
      *
      * @param Societe $societe      Tiers déjà enregistré
      * @param int     $catTarif     Catégorie tarifaire de la source (N_CatTarif)

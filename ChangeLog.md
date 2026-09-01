@@ -6,6 +6,46 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.28.0] — 2026-08-30
+
+### Modifié — fusion des niveaux de prix 1 et 2 : la grille passe de huit à sept niveaux
+
+Demande client du 21/08/2026 : « le prix comptoir n'existe plus vraiment ». Le constat
+technique le confirme — la caisse vend déjà au tarif par défaut (client TakePOS générique
+sans niveau, repli niveau 1) et la boutique publie `llx_product.price`. Chiffrage remis le
+30/08 (`rapports/derogations_comptoir_20260830.csv`) : 5 005 dérogations comptoir, dont 352
+seulement vendues au comptoir en 2026 (683 unités, −1 689 € d'écart cumulé face au tarif
+site). La fusion les abandonne — voir T9 dans ANOMALIES.md. **À appliquer une fois l'accord
+client donné** ; le code est prêt et la bascule tient en trois commandes.
+
+- **`aeromigration_price_level()`** : catégories 1 (comptoir) et 2 (site) → niveau 1, les
+  six autres décalées d'un cran (3→2 … 8→7). Seule autorité, partagée par `thirdparty`,
+  `pricelevel` et `customerprice` — la nouvelle table suffit, rien d'autre à toucher dans
+  ces scripts. Le niveau 1 continue de lire son tarif en catégorie 2 ; ceux de la
+  catégorie 1 ne nourrissent plus aucun niveau.
+- **`customerprice`** : sept niveaux (`LEVELS = 7`) ; les lectures de `z_tarifparticulier`
+  se bornent aux catégories qui nourrissent un niveau, et les tarifs comptoir (≈ 5 174
+  lignes valides) sont dénombrés « écartés » au rapport. Exige désormais
+  `PRODUIT_MULTIPRICES_LIMIT` **strictement** à 7 : une base restée à huit niveaux
+  afficherait au niveau 8 des prix que plus rien ne maintient.
+- **`pricelevel`** : `countMigrated()` agrège la source par niveau cible avant
+  rapprochement — deux catégories partagent désormais le niveau 1, les rapprocher une par
+  une compterait deux fois les tiers de ce niveau.
+- **`scripts/merge_price_levels.php`** (nouveau, une fois) : ce que les reprises ne font
+  pas — constantes (`PRODUIT_MULTIPRICES_LIMIT` 8→7, libellés décalés, LABEL8 supprimé),
+  décalage des ~124 tiers hors reprise (nés dans la boutique, invisibles de `pricelevel`),
+  suppression des lignes de prix du niveau 8 (~15 922, illisibles sous une limite à 7 —
+  SQL direct assumé, T9). Simulation par défaut ; le décalage ne s'exécute que si la
+  limite vaut encore 8, un second passage ne décale plus rien.
+
+Application sur une base déjà tarifée, dans l'ordre et d'affilée :
+`merge_price_levels.php --confirm` → `migrate.php pricelevel --confirm` →
+`migrate.php customerprice --confirm`. **Sans purge** : le niveau 1 ne change pas d'un
+centime, `llx_product.price` non plus — pas de fenêtre à zéro euro pour la boutique ; la
+seule fenêtre sensible est celle où clients et tarifs ne se correspondent pas encore, entre
+`pricelevel` et la fin de `customerprice`. Au jour J, aucune étape en plus : les scripts
+rejoués portent la nouvelle table (vérifier la limite à 7 — MISE_EN_PRODUCTION.md).
+
 ## [0.27.1] — 2026-08-21
 
 ### Corrigé — `stock` : les produits devenus kits bloquaient la purge et fausseraient un rejeu

@@ -14,12 +14,20 @@
  * ------------------------------------------------------------------------------
  *
  * La première reprise des tiers a recopié `N_CatTarif` tel quel dans `price_level`. La
- * correspondance a depuis changé : les catégories 1 et 2 sont permutées, le tarif du site
- * devenant le niveau 1 (voir aeromigration_price_level(), qui en porte la justification).
+ * correspondance a depuis changé deux fois : inversion des catégories 1 et 2 (0.12.0, le
+ * tarif du site devenant le niveau 1), puis fusion du comptoir dans le tarif du site et
+ * décalage des six autres catégories d'un cran (0.28.0) — voir
+ * aeromigration_price_level(), qui porte la table et sa justification.
  *
- * Sans ce script, **146 388 clients du site resteraient au niveau 2 et seraient facturés au
- * tarif comptoir**. Le symptôme serait d'autant plus vicieux qu'il ne produit aucune erreur :
- * juste un prix faux, sur presque tout le fichier client.
+ * Sans ce script, une partie du fichier client resterait sur l'ancienne grille et serait
+ * facturée au mauvais tarif. Le symptôme serait d'autant plus vicieux qu'il ne produit
+ * aucune erreur : juste un prix faux, sans que rien ne le signale.
+ *
+ * ## Le périmètre s'arrête aux tiers repris
+ *
+ * Le parcours est celui de la source : seuls les tiers `SAGE:%` sont visités. Les tiers
+ * nés dans la boutique n'ont pas de ligne dans `f_comptet` — leur décalage d'un cran lors
+ * de la fusion est porté par `scripts/merge_price_levels.php`, en une fois.
  *
  * ## Pourquoi un script à part, et non un rejeu de « thirdparty »
  *
@@ -214,12 +222,22 @@ class MigrationPriceLevel extends AeroMigrationRunner
         }
         $this->db->free($resql);
 
-        $aligned = 0;
+        // Les effectifs source s'agrègent d'abord par niveau cible : depuis la fusion
+        // comptoir/site, deux catégories partagent le niveau 1 — les rapprocher une par
+        // une compterait deux fois les tiers de ce niveau.
+        $sourceByLevel = array();
         foreach ($source as $cat => $nb) {
             $level = aeromigration_price_level($cat);
-            if ($level > 0 && isset($target[$level])) {
-                // Une catégorie ne peut pas compter plus d'alignés qu'elle n'a de tiers, ni
-                // que le niveau cible n'en porte.
+            if ($level > 0) {
+                $sourceByLevel[$level] = (isset($sourceByLevel[$level]) ? $sourceByLevel[$level] : 0) + $nb;
+            }
+        }
+
+        $aligned = 0;
+        foreach ($sourceByLevel as $level => $nb) {
+            if (isset($target[$level])) {
+                // Un niveau ne peut pas compter plus d'alignés qu'il n'a de tiers, d'un
+                // côté comme de l'autre.
                 $aligned += min($nb, $target[$level]);
             }
         }
