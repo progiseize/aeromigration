@@ -484,6 +484,11 @@ l'absence de règlements pour rédhibitoire et laissait ouverte une piste — «
 ailleurs ». Cette piste a abouti : ils sont dans `z_docregl_global`, table applicative hors du
 périmètre Sage exploré alors. Le script `invoice` en trouve **110 103**.
 
+Cette table ne commence toutefois qu'en **novembre 2019**, et elle est incomplète même
+ensuite : le drapeau « réglée » de l'entête (`DR_Regle`) fait foi, et
+`scripts/classify_paid_invoices.php` réaligne le statut de paiement dessus après la
+reprise — voir **D3** dans [ANOMALIES.md](ANOMALIES.md).
+
 ## Arborescence
 
 ```
@@ -498,6 +503,7 @@ aeromigration/
     ├── purge.php                défait ce qu'une reprise a produit
     ├── import_add_csv.php       charge l'export de l'éditeur
     ├── align_invoices_add.php   applique la règle « ADD fait foi » au parc de factures
+    ├── classify_paid_invoices.php   aligne le statut de règlement sur l'ancien ERP (DR_Regle)
     ├── relink_prestasync.php    rétablit les liaisons boutique après reprise sur base neuve
     ├── sync_kit_tracking.php    aligne les produits composés sur leurs composants
     ├── merge_price_levels.php   bascule la grille de huit à sept niveaux (fusion comptoir/site)

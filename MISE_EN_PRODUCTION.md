@@ -87,6 +87,12 @@ Points d'attention hérités du test :
   factures dont le tiers a disparu de `f_comptet` lui-même sont **reprises** depuis la 0.16.1,
   rattachées au tiers générique « Clients Anonymisés » (décision client du 19/08/2026) —
   créé automatiquement au premier besoin, code ADD d'origine en note de chaque facture.
+- **Après `invoice`, passer `scripts/classify_paid_invoices.php`** (simulation puis
+  `--confirm`) : le rejeu recrée « impayées » les ~80 000 factures dont l'ancien ERP dit
+  pourtant qu'elles sont réglées (`DR_Regle`, voir ANOMALIES D3 — la table des règlements
+  ne commence qu'en novembre 2019). Le script les classe payées, abandonne « Prescription »
+  les non-réglées antérieures à la borne, et laisse la vraie liste de recouvrement
+  (~1 400 pièces). Attendu : passe prescription vide, comme sur le test.
 - **`shipment` exige que `customerorder` soit passé en entier** : une commande citée par une
   préparation et absente de la cible est une erreur, pas un écart. Ses expéditions naissent
   clôturées **avec leur référence définitive** (`BL…`, règle des factures — coupure 01/10/2023,

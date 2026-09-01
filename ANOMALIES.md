@@ -1157,6 +1157,28 @@ Trois pièges dans le périmètre de réparation :
   (`SUM(COALESCE(DL_MontantTTC, 0))`), exactement comme dans la reconstruction — c'est ce
   qui fait converger le périmètre.
 
+### D3. `z_docregl_global` est incomplète — `DR_Regle` fait foi sur le règlement
+
+La table des règlements ne commence qu'en **novembre 2019** (5 lignes éparses avant, un
+filet d'essai au printemps 2019, puis ~15 000/an). Et même après, elle ne voit pas tout :
+sur 2020-2025, **6 739 factures marquées réglées par l'ancien ERP n'y ont aucune ligne** —
+des encaissements jamais enregistrés en détail.
+
+Le drapeau qui fait foi est dans l'entête : `f_docentete_global.DR_Regle`. Calibrage sur
+2020-2025, là où les règlements existent : 88 400 concordances avec l'état payé de la
+reprise, 12 contradictions. Les colonnes `reglement_1..10` et `Z_Solde` de l'entête sont
+vides partout — des vestiges.
+
+**Conséquence.** La reprise des factures (qui pose « payée » d'après les règlements) laisse
+« impayées » 71 585 factures d'avant octobre 2019 et ~6 700 récentes qui ont pourtant été
+encaissées. `scripts/classify_paid_invoices.php` réaligne : réglée ADD → payée ; non réglée
+et antérieure à la borne → abandonnée « Prescription » (arbitrage client du 31/08/2026).
+Ce qui reste impayé (~1 400 pièces, 126 k€) est la vraie liste de recouvrement.
+
+**Avant 2019, le drapeau ne discrimine rien** : il vaut 1 sur 100 % des 60 606 pièces —
+soit tout était soldé, soit c'est la valeur d'avant la surcouche. Les deux lectures
+convergent avec la décision de classer payé.
+
 ## Pièges Dolibarr rencontrés
 
 ### P1. `purge.php product --confirm` détruit des produits de la boutique

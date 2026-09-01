@@ -6,6 +6,33 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.29.0] — 2026-08-31
+
+### Ajouté — `classify_paid_invoices.php` : le statut de règlement aligné sur l'ancien ERP
+
+Demande client : classer payées les factures antérieures à 2019, pour prescription. L'étude
+a montré mieux : `z_docregl_global` (les règlements repris) ne commence qu'en novembre 2019
+et reste incomplète ensuite — l'entête `f_docentete_global.DR_Regle` porte le drapeau
+« réglée » qui fait foi (calibré 2020-2025 : 88 400 concordances, 12 contradictions ; voir
+D3 dans ANOMALIES.md). Le script applique donc « ADD fait foi » plutôt qu'une borne de
+date aveugle, en deux passes (arbitrage client du 31/08/2026) :
+
+1. impayée chez nous, RÉGLÉE dans ADD → classée **payée**, sans réserve ;
+2. non réglée des deux côtés et datée avant la borne (`--before=`, défaut 01/01/2019)
+   → classée **abandonnée**, note « Prescription ».
+
+Le reste est la vraie liste de recouvrement, dénombrée par exercice sans être touchée.
+Simulation locale (données du 21/08) : **80 138 pièces classées payées (9,74 M€ TTC, dont
+1 191 avoirs)**, passe prescription **vide** — ADD marque réglée la totalité de
+l'avant-2019 —, et **1 401 pièces laissées impayées (126 236 €)**, créances réelles.
+
+- `MAIN_AGENDA_ACTIONAUTO_BILL_PAYED` neutralisée en mémoire (même mécanique que P20) :
+  sans cela, le passage créerait ~80 000 événements d'agenda. Aucun autre déclencheur
+  n'écoute BILL_PAYED sur cette instance (vérifié : ni Prestasync, ni aerotoolbox).
+- Conventions habituelles : simulation par défaut, `--confirm`, `--limit`, `--user`,
+  `--source-db`, rapport ventilé par exercice fiscal. Idempotent — le parcours ne lit que
+  les impayées. **À rejouer au jour J après `invoice`** (MISE_EN_PRODUCTION.md).
+
 ## [0.28.0] — 2026-08-30
 
 ### Modifié — fusion des niveaux de prix 1 et 2 : la grille passe de huit à sept niveaux
