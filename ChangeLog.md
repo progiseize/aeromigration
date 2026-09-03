@@ -6,6 +6,34 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.31.0] — 2026-09-03
+
+### Ajouté — `packaging` : le conditionnement d'achat repris, en informatif
+
+Reprend les 269 lignes de `f_artfourniss` à `AF_Colisage > 1` (268 articles,
+34 fournisseurs — par 10, 6, 12, 4, 3, jusqu'à 288) dans les trois extrafields
+d'aerotoolbox 1.21.0 : `aerotb_pack_qty` = la valeur telle quelle, `aerotb_pack_unit`
+déduit de l'unité de vente de l'article (`AR_UniteVen` 6 = pack ; tout le reste, dont le
+« cL » détourné en colis, = colis — dans les faits, 269 colis et aucun pack),
+`aerotb_pack_forced` = **non**. ADD ne distingue pas l'imposé de l'informatif, et un
+conditionnement imposé à tort bloque des commandes et devient palier tarifaire : le
+caractère se durcira fiche par fiche. `AF_QteMini` est ignorée (identique à `AF_Colisage`
+sur toute la table, F6).
+
+Le champ natif `packaging` reste vide — et il est **vidé** au-delà de 1 : les bases
+migrées avant la 0.30.0 y portaient `AF_QteMini`, devenu « conditionnement imposé » le
+jour où aerotoolbox 1.21.0 a activé `PRODUCT_USE_SUPPLIER_PACKAGING`. Le « 1 » que
+`update_buyprice()` pose d'office quand la constante est active est inoffensif (multiple
+de 1) et laissé tel quel.
+
+À passer **après `supplierprice`** : la ligne cible est retrouvée par son `import_key`
+(« SAGE:cbMarq »), et l'idempotence est portée par la comparaison des valeurs (extrafields
+et natif). Refuse de démarrer si les extrafields d'aerotoolbox 1.21.0 sont absents. Sa
+purge remet les trois extrafields à néant sur les lignes reprises.
+
+Non repris, en attente de décision client : les 1 871 articles marqués « vendu par
+colis » sans quantité chiffrée — un contenant sans nombre, purement descriptif.
+
 ## [0.30.0] — 2026-09-03
 
 ### Ajouté — `merge_suppliers.php` : les fournisseurs en double fusionnés

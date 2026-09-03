@@ -24,6 +24,7 @@ AeroMigScriptNewsletter=Désinscriptions newsletter
 AeroMigScriptProduct=Articles
 AeroMigScriptCategory=Catégories produit
 AeroMigScriptSupplierPrice=Tarifs fournisseurs
+AeroMigScriptPackaging=Conditionnement d'achat
 AeroMigScriptWarehouse=Entrepôts
 AeroMigScriptLocation=Emplacements de stockage
 AeroMigScriptStock=Stocks

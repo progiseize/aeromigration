@@ -33,6 +33,7 @@ php migrate.php newsletter     désinscriptions → enrichit les tiers
 php migrate.php category       catalogue
 php migrate.php product        articles        → rattachés aux catégories
 php migrate.php supplierprice  tarifs fournisseurs → relient articles et tiers
+php migrate.php packaging      conditionnements d'achat → sur les lignes de tarif
 php migrate.php warehouse      dépôts → entrepôts
 php migrate.php location       emplacements → dictionnaire d'aerotoolbox
 php migrate.php stock          stocks → dans l'entrepôt du dépôt
@@ -54,6 +55,14 @@ correspondent pas — et un client dont le niveau n'a pas encore de prix se voit
 
 La synchronisation est rallumée et **rejouée** une fois les deux passés : la boutique publie
 `llx_product.price`, c'est-à-dire le niveau 1, qui vient de changer de sens.
+
+`packaging` complète les lignes de tarif que `supplierprice` vient de créer : les
+269 conditionnements d'ADD (`AF_Colisage > 1`) vont dans les trois extrafields
+d'aerotoolbox 1.21.0, **en informatif** — ADD ne dit pas si un conditionnement contraint,
+et un « imposé » à tort bloque des commandes. Le champ natif `packaging`, qui signifie
+désormais « imposé », reste vide (il est même vidé s'il dépasse 1, trace d'une reprise
+antérieure à la 0.30.0 ; le « 1 » que le coeur pose d'office est laissé). Idempotent par
+comparaison des valeurs, la ligne étant retrouvée par `import_key`.
 
 ### Deux bases sources
 

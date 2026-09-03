@@ -97,6 +97,15 @@ function aeromigrationGetScripts()
             'class' => 'MigrationSupplierPrice',
             'file'  => '/aeromigration/class/migrationsupplierprice.class.php',
         ),
+        // Dépend des tarifs fournisseurs : complète leurs lignes avec le conditionnement
+        // d'achat (extrafields aerotoolbox 1.21.0), en informatif — le champ natif
+        // « packaging », qui signifie « imposé », reste vide et est vidé au besoin.
+        array(
+            'code'  => 'packaging',
+            'label' => 'AeroMigScriptPackaging',
+            'class' => 'MigrationPackaging',
+            'file'  => '/aeromigration/class/migrationpackaging.class.php',
+        ),
         // Indépendant des autres reprises, mais à passer avant les stocks : ceux-ci s'y
         // rattachent. Lit f_depotempl, la table des emplacements de rangement.
         array(

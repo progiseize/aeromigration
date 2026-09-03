@@ -71,7 +71,7 @@ document (`MAX(DO_Date)` sur `f_docentete_global`) au jour J.
 ### 3. Rejouer les reprises
 
 Dans l'ordre du README (`thirdparty → contact → newsletter → category → product →
-supplierprice → warehouse → location → stock → productlocation → supplierorder →
+supplierprice → packaging → warehouse → location → stock → productlocation → supplierorder →
 customerorder → invoice → reception → shipment → proposal → pricelevel → customerprice →
 productkit`), chacune en `--dry-run` d'abord.
 

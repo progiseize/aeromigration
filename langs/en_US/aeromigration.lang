@@ -24,6 +24,7 @@ AeroMigScriptNewsletter=Newsletter unsubscriptions
 AeroMigScriptProduct=Products
 AeroMigScriptCategory=Product categories
 AeroMigScriptSupplierPrice=Supplier prices
+AeroMigScriptPackaging=Purchase packaging
 AeroMigScriptWarehouse=Warehouses
 AeroMigScriptLocation=Storage locations
 AeroMigScriptStock=Stock
