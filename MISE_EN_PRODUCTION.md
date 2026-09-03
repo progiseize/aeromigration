@@ -77,6 +77,12 @@ productkit`), chacune en `--dry-run` d'abord.
 
 Points d'attention hérités du test :
 
+- **Après `product`, passer `scripts/import_disposuivi.php`** (simulation puis `--confirm`) :
+  l'arbitrage client du 03/09 sur la disponibilité et le suivi (fichier
+  `migrationdata/disposuivi_migration.csv`). Le rejeu de `product` recrée les
+  395 « EMPLACEMENT » (ils restent dans `f_article`) et remet les 46 prestations en type
+  produit : ce script les re-supprime et les re-bascule à chaque rejeu, tant que le client
+  n'a pas corrigé ADD.
 - **Après `supplierprice`, passer `scripts/merge_suppliers.php`** (simulation puis
   `--confirm`) : la production a les mêmes anciens fournisseurs boutique que le test, et
   `thirdparty` les recréera en double depuis ADD pour la même raison (voir ANOMALIES

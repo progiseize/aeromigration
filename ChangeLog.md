@@ -6,6 +6,37 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.32.0] — 2026-09-03
+
+### Ajouté — `import_disposuivi.php` : disponibilité et suivi arbitrés par le client
+
+Le client a passé en revue son catalogue entier (16 008 lignes,
+`migrationdata/disposuivi_migration.csv`, Windows-1252, références padées à cinq chiffres
+— appariement canonique) : pour chaque article, la disponibilité et le suivi voulus, dans
+les libellés exacts des dictionnaires d'aerotoolbox. C'est la passe de qualification
+manuelle par-dessus la reprise — elle couvre notamment les articles jamais qualifiés par
+la surcouche ADD (A3).
+
+Quatre valeurs spéciales, arbitrées le 03/09/2026 :
+
+- **CORRIGÉ SUR ADD** (114) : corrigées directement dans ADD, ignorées — la reprise fait foi ;
+- **EMPLACEMENT** (395, série 90000+) : des emplacements créés en articles par ADD,
+  **supprimés** via `Product::delete()` (vérifié : aucun document, stock, tarif ni liaison
+  boutique). Ils restent dans `f_article` : un rejeu de `product` les recrée, ce script se
+  rejoue après lui ;
+- **PRESTATION** (46) : passées en type **service** (`setValueFrom`, sans déclencheur — 38
+  sont liées à la boutique), disponibilité « Prestation » ; les reliquats de stock (7338,
+  9163, 9647) sont **soldés par une correction** avant la bascule ;
+- **PRODUIT EN DEPOT-VENTE** (3) : fonctionnalité non développée, signalées sans écriture
+  (et liées à la boutique, contrairement à l'intuition du client).
+
+Le reste va dans `aerotb_availability` et `aerotb_tracking` par correspondance de libellé ;
+un suivi vide ou « -- » ne touche à rien. Conventions habituelles : simulation par défaut,
+`--confirm`, `--limit`, `--file`, idempotent par comparaison (un emplacement déjà supprimé
+est reconnu, pas signalé), transaction globale annulée à la première erreur. Simulation
+locale : 7 437 disponibilités et 7 300 suivis à poser, 7 955 produits déjà conformes,
+99 références plus récentes que la photo ADD locale.
+
 ## [0.31.0] — 2026-09-03
 
 ### Ajouté — `packaging` : le conditionnement d'achat repris, en informatif

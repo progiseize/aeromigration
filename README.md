@@ -534,6 +534,7 @@ aeromigration/
     ├── migrate.php              lance une reprise
     ├── purge.php                défait ce qu'une reprise a produit
     ├── import_add_csv.php       charge l'export de l'éditeur
+    ├── import_disposuivi.php    applique l'arbitrage client : disponibilité, suivi, emplacements, prestations
     ├── align_invoices_add.php   applique la règle « ADD fait foi » au parc de factures
     ├── classify_paid_invoices.php   aligne le statut de règlement sur l'ancien ERP (DR_Regle)
     ├── relink_prestasync.php    rétablit les liaisons boutique après reprise sur base neuve
