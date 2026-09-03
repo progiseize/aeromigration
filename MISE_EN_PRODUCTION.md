@@ -77,6 +77,18 @@ productkit`), chacune en `--dry-run` d'abord.
 
 Points d'attention hérités du test :
 
+- **Après `supplierprice`, passer `scripts/merge_suppliers.php`** (simulation puis
+  `--confirm`) : la production a les mêmes anciens fournisseurs boutique que le test, et
+  `thirdparty` les recréera en double depuis ADD pour la même raison (voir ANOMALIES
+  Tiers §30 — `llx_prestasync_supplier` n'avait pas été alimentée). Le script fusionne
+  l'ancien dans le tiers SAGE, repointe les correspondances PrestaShop et purge les tarifs
+  d'achat que `supplierprice` remplace. Après `supplierprice` et non `thirdparty` : le
+  `--map` fusionne aussi les doublons internes à ADD (SODIS → F208, Alpha Industries →
+  F990000031), et les tarifs d'un tiers absorbé doivent être repris AVANT que son `ref_ext`
+  disparaisse — le script diffère d'ailleurs ces fusions-là s'il détecte des tarifs ADD non
+  repris. Contrôler les appariements interprétés affichés par la simulation, et refaire le
+  `--map` depuis `data/fusions_fournisseurs.csv` (les réfs `Fxxx;Fyyy` restent valables,
+  les rowid anciens changent avec la base).
 - **`pricelevel` et `customerprice` vont ensemble**, et Prestasync doit être suspendu sur
   toute la fenêtre : entre la purge des tarifs et la fin du rejeu, `llx_product.price` vaut
   zéro. **La grille est à SEPT niveaux depuis la 0.28.0** (fusion comptoir/site) :

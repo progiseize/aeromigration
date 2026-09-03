@@ -1754,6 +1754,24 @@ décale les tiers nés dans la boutique (~124), que `pricelevel` ne visite pas.
 | 27 | `Unsubscribe_Newsletter` sans champ cible sur le tiers | 2 621 | À traiter avec les contacts |
 | 28 | `RE_No` : table des représentants absente de l'import | 2 071 | Non repris, récupérable |
 | 29 | `N_Devise` : table des devises absente de l'import | 97 | Codes déduits des pays, repris |
+| 30 | Fournisseurs recréés en double par la reprise | 381 anciens / 394 repris | Fusionnés par `merge_suppliers.php` (0.30.0) |
+
+### §30. Fournisseurs en double : la table de correspondance n'avait pas été alimentée
+
+La boutique tournait déjà quand `thirdparty` est passé, et `llx_prestasync_supplier` — la
+table qui aurait permis de reconnaître les fournisseurs déjà présents — n'avait pas été
+alimentée : le script les a recréés depuis ADD. Chaque fournisseur existe donc deux fois :
+l'ancien tiers boutique (sans `ref_ext`, porteur des 317 correspondances PrestaShop et des
+10 224 tarifs d'achat historiques) et le tiers repris (`SAGE:Fxxx`, porteur des commandes
+fournisseur reprises).
+
+`scripts/merge_suppliers.php` fusionne l'ancien dans le repris (`Societe::mergeCompany()`),
+repointe la table de correspondance — aucun module n'implémente le hook `replaceThirdparty` —
+et purge les tarifs d'achat que la reprise remplace (couple présent dans `f_artfourniss` :
+l'ADD fait foi). L'appariement se fait sur le nom, ADD tronquant les intitulés de tiers à
+35 caractères ; les cas ambigus — surtout les fournisseurs « poubelle » d'ADD en série
+`F990000xxx` (NAZE, annulé, LIBRE) — se tranchent un par un via `--map`. **À rejouer au
+jour J après `thirdparty`** : la production recréera les mêmes doublons pour la même raison.
 
 ---
 

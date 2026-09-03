@@ -102,7 +102,10 @@ class MigrationSupplierPrice extends AeroMigrationRunner
      * Toujours 1 : le prix de la source est unitaire. Reprendre AF_QteMini comme palier
      * priverait le produit de tout prix en dessous du seuil, find_min_price_product_
      * fournisseur() ne retenant que les lignes dont la quantité est inférieure ou égale à
-     * celle commandée. Le conditionnement est repris à part, dans `packaging`.
+     * celle commandée. Le conditionnement n'est pas repris ici non plus : depuis
+     * aerotoolbox 1.21.0, le champ natif `packaging` signifie « conditionnement IMPOSÉ »
+     * (arrondi des commandes, PRODUCT_USE_SUPPLIER_PACKAGING active) — ADD ne distinguant
+     * pas l'imposé de l'informatif, la reprise le pose en informatif via le script dédié.
      */
     const QUANTITY = 1;
 
@@ -845,12 +848,15 @@ class MigrationSupplierPrice extends AeroMigrationRunner
         }
 
         // Conditionnement : AF_QteMini et AF_Colisage sont rigoureusement identiques sur
-        // toute la table, c'est la même information saisie deux fois.
-        $packaging = (float) $row->AF_QteMini;
-        if ($packaging > 1) {
+        // toute la table, c'est la même information saisie deux fois. Dénombré pour le
+        // rapport mais PLUS ÉCRIT ici : depuis aerotoolbox 1.21.0, `packaging` rempli
+        // signifie « conditionnement imposé » (le coeur arrondit les commandes,
+        // PRODUCT_USE_SUPPLIER_PACKAGING est active) — or ADD ne dit pas si le
+        // conditionnement contraint ou informe. Décision client : informatif par défaut,
+        // posé dans les extrafields aerotoolbox par le script « packaging », qui laisse le
+        // champ natif vide.
+        if ((float) $row->AF_QteMini > 1) {
             $this->packagingSet++;
-        } else {
-            $packaging = 0;
         }
 
         // Délai : la valeur vide doit rester vide et non devenir zéro, le coeur écrivant
@@ -909,7 +915,6 @@ class MigrationSupplierPrice extends AeroMigrationRunner
             'rate'        => $currency['rate'],
             'vat'         => $vat,
             'desc'        => $desc,
-            'packaging'   => $packaging,
             'delay'       => $delay,
             'remise'      => $remise,
             'reputation'  => $reputation,
@@ -1071,7 +1076,7 @@ class MigrationSupplierPrice extends AeroMigrationRunner
 
         // Une ligne adoptée ne reçoit pas de marqueur : la purge ne doit pas supprimer ce
         // que la reprise n'a pas créé.
-        $this->stampLine($rowid, ($adopted ? '' : $this->buildRefExt($this->getSourceKey($row))), $map['packaging']);
+        $this->stampLine($rowid, ($adopted ? '' : $this->buildRefExt($this->getSourceKey($row))));
 
         if ($existingId > 0) {
             return array('action' => 'updated', 'id' => $rowid);
@@ -1081,24 +1086,24 @@ class MigrationSupplierPrice extends AeroMigrationRunner
     }
 
     /**
-     * Complète la ligne tarifaire avec ce que update_buyprice() n'écrit pas.
+     * Complète la ligne tarifaire avec ce que update_buyprice() n'écrit pas : `import_key`.
      *
-     * `import_key` n'y figure pas, et `packaging` n'y est écrite que si la constante
-     * PRODUCT_USE_SUPPLIER_PACKAGING est posée — ce que la reprise se refuse à faire,
-     * cette constante modifiant l'arrondi des quantités d'achat pour toute l'instance.
+     * Jusqu'à la 0.30.0, `packaging` s'écrivait aussi ici. Plus maintenant : depuis
+     * aerotoolbox 1.21.0 ce champ est dérivé des extrafields de conditionnement et signifie
+     * « imposé » — c'est le script « packaging » qui décide, et il le laisse vide
+     * (reprise en informatif).
      *
-     * ProductFournisseurPrice étant un objet à part entière du coeur, les deux colonnes
-     * s'écrivent par son update() : aucune requête directe n'est nécessaire.
+     * ProductFournisseurPrice étant un objet à part entière du coeur, la colonne s'écrit
+     * par son update() : aucune requête directe n'est nécessaire.
      *
      * @param int    $rowid     Identifiant de la ligne tarifaire
      * @param string $importKey Marqueur de reprise, chaîne vide pour ne pas marquer
-     * @param float  $packaging Conditionnement, 0 pour ne rien écrire
      * @return void
      * @throws Exception Si la ligne est introuvable ou la mise à jour refusée
      */
-    protected function stampLine($rowid, $importKey, $packaging)
+    protected function stampLine($rowid, $importKey)
     {
-        if ($importKey === '' && $packaging <= 0) {
+        if ($importKey === '') {
             return;
         }
 
@@ -1107,12 +1112,7 @@ class MigrationSupplierPrice extends AeroMigrationRunner
             throw new Exception('Ligne tarifaire introuvable (rowid '.$rowid.') : '.$this->objectErrors($line));
         }
 
-        if ($importKey !== '') {
-            $line->import_key = $importKey;
-        }
-        if ($packaging > 0) {
-            $line->packaging = $packaging;
-        }
+        $line->import_key = $importKey;
 
         if ($line->update($this->user) <= 0) {
             throw new Exception('Échec du marquage de la ligne '.$rowid.' : '.$this->objectErrors($line));
@@ -1477,9 +1477,10 @@ class MigrationSupplierPrice extends AeroMigrationRunner
         $block = array();
 
         if ($this->packagingSet > 0) {
-            $block[] = $this->countLine($this->packagingSet, 'conditionnement(s) repris dans « packaging »');
-            $block[] = '          exploités par Dolibarr seulement si PRODUCT_USE_SUPPLIER_PACKAGING';
-            $block[] = '          est activée, ce que la reprise ne fait pas.';
+            $block[] = $this->countLine($this->packagingSet, 'conditionnement(s) détecté(s), non repris ici');
+            $block[] = '          « packaging » signifie désormais conditionnement IMPOSÉ (aerotoolbox';
+            $block[] = '          1.21.0) : passez « scripts/migrate.php packaging » pour les reprendre';
+            $block[] = '          en informatif, dans les extrafields.';
         }
         if ($this->delaySet > 0) {
             $block[] = $this->countLine($this->delaySet, 'délai(s) d\'approvisionnement repris');

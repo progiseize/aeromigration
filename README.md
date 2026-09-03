@@ -244,6 +244,29 @@ assumée : `PrestaCustomer::setCustomDolLink()` n'exécute qu'un `INSERT` sans t
 annexe, et passer par la classe imposerait d'ouvrir une connexion webservice vers la
 boutique pour chacun des ~135 000 tiers.
 
+### Les fournisseurs, adoptés trop tard : `merge_suppliers.php`
+
+L'adoption ci-dessus repose sur la table de correspondance de la passerelle — or côté
+fournisseurs, `llx_prestasync_supplier` n'avait pas été alimentée quand `thirdparty` est
+passé : les fournisseurs déjà présents n'ont pas été reconnus et ont été **recréés** depuis
+ADD (ANOMALIES, Tiers §30). `scripts/merge_suppliers.php` répare : chaque ancien tiers
+boutique est fusionné dans son tiers repris via `Societe::mergeCompany()` — le SAGE survit,
+son `ref_ext` étant la clé d'idempotence de toute la reprise. Le script repointe au passage
+`llx_prestasync_supplier` (le hook `replaceThirdparty` n'est implémenté par aucun module) et
+purge les tarifs d'achat que `supplierprice` remplace (couple présent dans `f_artfourniss` ;
+les autres suivent la fusion).
+
+L'appariement se fait sur le nom — ADD tronque les intitulés à 35 caractères, d'où trois
+passes (identique, compacté, troncature) qui n'acceptent chacune qu'un candidat unique. Les
+appariements interprétés s'affichent pour contrôle ; ambigus et sans-correspondance se
+tranchent via `--map=fichier.csv` (`rowid_ancien;Fxxx`). Le même fichier fusionne les
+doublons internes à ADD (`Fxxx;Fyyy` — SODIS, Alpha Industries : voir
+`data/fusions_fournisseurs.csv`), avec une garde : si le tiers absorbé a des tarifs ADD
+pas encore repris, la fusion est différée jusqu'au passage de `supplierprice` — sinon ils
+seraient écartés pour toujours, le `ref_ext` ayant disparu. Simulation par défaut,
+rejouable : un ancien absorbé ne réapparaît plus. À passer **après `supplierprice`** ;
+et après tout rejeu de `thirdparty`, qui recrée les doublons (les deux sortes).
+
 ## Les commandes clients, quand la boutique les a déjà créées
 
 Prestasync crée dans Dolibarr les commandes venues du site, et la source les contient aussi.
@@ -507,6 +530,7 @@ aeromigration/
     ├── relink_prestasync.php    rétablit les liaisons boutique après reprise sur base neuve
     ├── sync_kit_tracking.php    aligne les produits composés sur leurs composants
     ├── merge_price_levels.php   bascule la grille de huit à sept niveaux (fusion comptoir/site)
+    ├── merge_suppliers.php      fusionne les fournisseurs en double (ancien tiers boutique -> tiers repris)
     ├── fix_invoice_signs.php    correctif ponctuel, voir ci-dessous
     └── delete_invoices_cancelled_orders.php   remplacé par align_invoices_add.php
 ```

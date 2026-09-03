@@ -6,6 +6,67 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.30.0] — 2026-09-03
+
+### Ajouté — `merge_suppliers.php` : les fournisseurs en double fusionnés
+
+La boutique tournait déjà quand la reprise des tiers est passée, et la table de
+correspondance de la passerelle (`llx_prestasync_supplier`) n'avait pas été alimentée :
+`thirdparty` n'avait aucun moyen de reconnaître les fournisseurs déjà présents et les a
+recréés depuis ADD. Chaque fournisseur existe donc deux fois : l'ancien (317 correspondances
+PrestaShop, 10 224 tarifs d'achat historiques) et le repris (`SAGE:Fxxx`, 2 568 commandes
+fournisseur). Voir Tiers §30 dans ANOMALIES.md.
+
+**Le tiers SAGE survit** — `ref_ext` est la clé d'idempotence de toute la reprise : garder
+l'ancien ferait renaître le doublon au prochain passage. La fusion passe par
+`Societe::mergeCompany()` du coeur (tarifs, commandes, contacts, catégories, fichiers,
+champs vides complétés), et le script ajoute ce que le coeur ignore :
+
+- **`llx_prestasync_supplier` repointée** avant chaque fusion — aucun module n'implémente le
+  hook `replaceThirdparty`, les correspondances PrestaShop pointeraient des tiers supprimés.
+  C'est précisément la table dont l'oubli a causé les doublons : la fusion la reconnecte ;
+- **les tarifs d'achat remplacés par la reprise sont purgés** (journal et extrafields
+  compris) : après fusion, l'ancienne ligne et celle de `supplierprice` coexisteraient sur
+  le même fournisseur. Une ligne n'est supprimée que si son couple (article repris,
+  fournisseur SAGE) figure dans `f_artfourniss` — l'ADD fait foi ; sans équivalent ADD,
+  elle suit la fusion, seule information d'achat disponible.
+
+**L'appariement se fait sur le nom, en trois passes** — ADD tronque les intitulés à
+35 caractères et les anciens tiers n'ont pas d'email : nom identique (340), ponctuation et
+accents près (« E.T.A.I. » = « ETAI », 3), troncature ADD sur préfixe compacté d'au moins
+20 caractères (8). Chaque passe n'accepte qu'un candidat unique ; les appariements
+interprétés s'affichent en clair pour contrôle avant le `--confirm`. Restent au rapport
+les ambigus — pour l'essentiel les fournisseurs « poubelle » d'ADD en série F990000xxx
+(NAZE, annulé, LIBRE) — et 14 sans correspondance, à trancher un par un via
+`--map=fichier.csv` (`rowid_ancien;Fxxx`).
+
+**Le `--map` fusionne aussi les doublons internes à ADD** (`Fxxx;Fyyy`) : SODIS existe en
+F208 et F990000004, Alpha Industries en F990000029/30/31 (décision du 03/09 : tout SODIS
+dans F208, tout Alpha dans F990000031 — voir `data/fusions_fournisseurs.csv`, dont les
+rowid anciens sont propres à chaque base). Garde associée : un tiers absorbé qui a des
+tarifs dans `f_artfourniss` mais aucune ligne de prix Dolibarr attend encore
+`supplierprice` — sa fusion est différée, sinon ses tarifs seraient définitivement écartés
+(le script ne retrouverait plus son `ref_ext`). Ces fusions-là passent donc APRÈS
+`supplierprice`, et comme la réf absorbée reste dans `f_comptet`, un rejeu de `thirdparty`
+recrée le tiers : repasser le script avec son `--map` après tout rejeu.
+
+Simulation locale : 351 fusions, 299 correspondances PrestaShop repointées, 9 524 tarifs
+remplacés purgés, 206 déplacés. Conventions habituelles : simulation par défaut,
+`--confirm`, `--user`, `--source-db`, transaction globale, rejouable (un ancien absorbé ne
+réapparaît plus). **À passer au jour J après `thirdparty`** (MISE_EN_PRODUCTION.md) — et
+distinct de `relink_prestasync.php`, qui traite l'autre scénario (base neuve, rowids
+changés, CSV de correspondances).
+
+### Modifié — `supplierprice` n'écrit plus le champ natif `packaging`
+
+Depuis aerotoolbox 1.21.0, `packaging` est dérivé des extrafields de conditionnement et
+signifie « conditionnement IMPOSÉ » — `PRODUCT_USE_SUPPLIER_PACKAGING` est active, le coeur
+arrondit les quantités des commandes fournisseur sur ce champ. Or ADD ne dit pas si un
+conditionnement contraint ou informe, et la décision client est : informatif par défaut.
+`supplierprice` dénombre donc toujours les 269 conditionnements au rapport mais ne les
+écrit plus ; c'est le script `packaging` (à venir, 0.31.0) qui posera les trois extrafields
+aerotoolbox en laissant le champ natif vide.
+
 ## [0.29.0] — 2026-08-31
 
 ### Ajouté — `classify_paid_invoices.php` : le statut de règlement aligné sur l'ancien ERP
