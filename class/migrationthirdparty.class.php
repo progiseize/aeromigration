@@ -629,6 +629,16 @@ class MigrationThirdparty extends AeroMigrationRunner
             return;
         }
 
+        // Clients uniquement : l'id_externe d'un fournisseur désigne son id dans
+        // ps_supplier, pas un client — l'inscrire dans llx_prestasync_customer
+        // fabriquerait un lien vers un client boutique qui n'existe pas (constaté
+        // au jour J : F193 « AERO SENSE », id_externe 193 = son id fournisseur).
+        // Les fournisseurs sont rattachés par relink_prestasync.php (étape 6),
+        // dans llx_prestasync_supplier, depuis le fichier de liaison curé.
+        if ((int) $row->CT_Type !== 0) {
+            return;
+        }
+
         $prestaId = $this->getPrestaCustomerId($row);
         if ($prestaId === '') {
             return;

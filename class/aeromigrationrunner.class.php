@@ -892,6 +892,12 @@ abstract class AeroMigrationRunner
         $stop      = false;
 
         while (!$stop) {
+            // Le coeur réarme parfois le chrono en cours de route — commonGenerateDocument()
+            // pose un set_time_limit(120) « pour les PDF », et 120 s CPU plus tard PHP tue le
+            // passage, quel que soit le -d max_execution_time=0 de la ligne de commande
+            // (vécu au jour J : invoice mort à 77 %). On se re-désarme à chaque tranche.
+            @set_time_limit(0);
+
             $rows = $this->fetchBatch($cursor);
             if ($rows === null) {
                 return -1;

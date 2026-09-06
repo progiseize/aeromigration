@@ -33,6 +33,15 @@
  * - **Le taux de TVA n'est pas dans la table.** Il découle de la famille (`FA_CodeFamille`),
  *   dont le référentiel Sage n'a pas été importé. La correspondance V20 → 20 % et
  *   V5 → 5,5 % a été arrêtée avec le client.
+ *
+ * - **Les codes comptables vivent dans `f_artcompta`**, une ligne par article × type
+ *   (0 vente, 1 achat) × catégorie comptable (`p_catcompta` : 1 France, 2 CEE, 3 DOM-TOM,
+ *   4 Export, 5 CEE PRO). 13 713 articles portent au moins un compte de vente, 1 829 des
+ *   comptes d'achat ; les autres retombent sur leur famille (`f_famcompta`), mécanique
+ *   native de Sage. Sage écrit les comptes sur huit chiffres (70700000) là où le plan
+ *   PCG26-AERO de Dolibarr les raccourcit (707) : la normalisation est celle du cœur,
+ *   `clean_account()` — les zéros de queue tombent. Les 13 codes distincts de la source
+ *   trouvent tous leur compte dans le plan (vérifié le 05/09/2026).
  */
 
 dol_include_once('/aeromigration/class/aeromigrationrunner.class.php');
@@ -123,6 +132,40 @@ class MigrationProduct extends AeroMigrationRunner
 
     /** @var float Taux appliqué aux familles hors correspondance (AREAFFECTER, DIVERS) */
     protected $defaultVat = 20;
+
+    /**
+     * Correspondance des catégories comptables Sage vers les champs de la fiche produit.
+     *
+     * Premier niveau : `ACP_Type` (0 vente, 1 achat). Second : `ACP_Champ`, la catégorie
+     * comptable dont `p_catcompta` donne les libellés — 1 France, 2 CEE, 4 Export/Import.
+     * Les catégories 3 (DOM-TOM) et 5 (CEE PRO) n'ont pas d'équivalent sur la fiche
+     * Dolibarr et sont laissées de côté ; le DOM-TOM porte de toute façon le même compte
+     * que l'export (70790000) sur la quasi-totalité des lignes.
+     *
+     * @var array<int,array<int,string>>
+     */
+    protected $accountancyFieldMap = array(
+        0 => array(1 => 'accountancy_code_sell', 2 => 'accountancy_code_sell_intra', 4 => 'accountancy_code_sell_export'),
+        1 => array(1 => 'accountancy_code_buy', 2 => 'accountancy_code_buy_intra', 4 => 'accountancy_code_buy_export'),
+    );
+
+    /** @var array<string,array<string,string>> AR_Ref -> champ Dolibarr -> compte normalisé */
+    protected $artCompta = array();
+
+    /** @var array<string,array<string,string>> FA_CodeFamille -> champ Dolibarr -> compte normalisé */
+    protected $famCompta = array();
+
+    /** @var int Produits dont les codes comptables ont été écrits ou corrigés */
+    protected $accountingAligned = 0;
+
+    /** @var int Produits dont les codes étaient déjà conformes */
+    protected $accountingAlreadyOk = 0;
+
+    /** @var int Articles sans aucun code résoluble, fiche vide : rien à faire */
+    protected $accountingNone = 0;
+
+    /** @var array<string,int> Codes Sage absents du plan comptable actif -> nombre de lignes */
+    protected $accountingUnknown = array();
 
     /**
      * Correspondance des libellés de disponibilité vers le dictionnaire du module
@@ -233,7 +276,107 @@ class MigrationProduct extends AeroMigrationRunner
             return -1;
         }
 
+        if ($this->loadAccountingCodes() < 0) {
+            return -1;
+        }
+
         return 1;
+    }
+
+    /**
+     * Charge les codes comptables de la source, normalisés pour Dolibarr.
+     *
+     * Deux index sont montés, article puis famille — dans cet ordre de priorité à la
+     * résolution, qui est celui de Sage : le compte posé sur l'article prime, la famille
+     * sert de repli. Les 28 000 lignes de `f_artcompta` tiennent sans peine en mémoire.
+     *
+     * La normalisation retire les zéros de queue (« 70700000 » → « 707 »), comme le fait
+     * `clean_account()` du cœur : c'est sous cette forme que le plan PCG26-AERO porte ses
+     * comptes. Chaque code est confronté au plan actif (`CHARTOFACCOUNTS`) ; un code
+     * introuvable est écrit quand même — la donnée vaut mieux que le vide — mais compté
+     * et signalé au rapport, car la ventilation comptable ne saura pas le résoudre.
+     *
+     * @return int 1 si OK, -1 en cas d'erreur SQL
+     */
+    protected function loadAccountingCodes()
+    {
+        // Le plan comptable actif, pour contrôler que chaque code y existe.
+        $chart = array();
+        $sql   = 'SELECT aa.account_number FROM '.MAIN_DB_PREFIX.'accounting_account as aa'
+            .' JOIN '.MAIN_DB_PREFIX.'accounting_system as sys ON sys.pcg_version = aa.fk_pcg_version'
+            .' WHERE sys.rowid = '.((int) getDolGlobalInt('CHARTOFACCOUNTS')).' AND aa.active = 1';
+        $resql = $this->db->query($sql);
+        if ($resql) {
+            while ($obj = $this->db->fetch_object($resql)) {
+                $chart[(string) $obj->account_number] = true;
+            }
+            $this->db->free($resql);
+        }
+        if (empty($chart)) {
+            dol_syslog('MigrationProduct : aucun plan comptable actif, codes repris sans contrôle d\'existence', LOG_WARNING);
+        }
+
+        foreach (array(
+            array('table' => 'f_famcompta', 'key' => 'FA_CodeFamille', 'type' => 'FCP_Type', 'champ' => 'FCP_Champ', 'compte' => 'FCP_ComptaCPT_CompteG', 'index' => 'famCompta'),
+            array('table' => 'f_artcompta', 'key' => 'AR_Ref', 'type' => 'ACP_Type', 'champ' => 'ACP_Champ', 'compte' => 'ACP_ComptaCPT_CompteG', 'index' => 'artCompta'),
+        ) as $def) {
+            $sql = 'SELECT '.$def['key'].' as k, '.$def['type'].' as t, '.$def['champ'].' as c, '
+                .$def['compte'].' as compte FROM '.$this->src($def['table'])
+                ." WHERE TRIM(COALESCE(".$def['compte'].", '')) <> ''";
+
+            $resql = $this->db->query($sql);
+            if (!$resql) {
+                $this->errors[] = array('key' => '', 'message' => 'Lecture de '.$def['table'].' impossible : '.$this->db->lasterror());
+                return -1;
+            }
+
+            while ($obj = $this->db->fetch_object($resql)) {
+                $type  = (int) $obj->t;
+                $champ = (int) $obj->c;
+                if (!isset($this->accountancyFieldMap[$type][$champ])) {
+                    continue; // stock, DOM-TOM, CEE PRO : sans équivalent sur la fiche
+                }
+
+                $code = rtrim(trim((string) $obj->compte), '0');
+                if ($code === '') {
+                    continue;
+                }
+
+                if (!empty($chart) && !isset($chart[$code])) {
+                    // La forme longue de Sage peut exister telle quelle dans un plan non raccourci.
+                    if (isset($chart[trim((string) $obj->compte)])) {
+                        $code = trim((string) $obj->compte);
+                    } elseif ($def['index'] === 'artCompta') {
+                        $raw = trim((string) $obj->compte);
+                        $this->accountingUnknown[$raw] = isset($this->accountingUnknown[$raw])
+                            ? $this->accountingUnknown[$raw] + 1 : 1;
+                    }
+                }
+
+                $key = trim((string) $obj->k);
+                $this->{$def['index']}[$key][$this->accountancyFieldMap[$type][$champ]] = $code;
+            }
+            $this->db->free($resql);
+        }
+
+        return 1;
+    }
+
+    /**
+     * Codes comptables d'un article : ceux de sa fiche, complétés par sa famille.
+     *
+     * @param string $ref    Référence article (AR_Ref)
+     * @param string $family Famille Sage (FA_CodeFamille)
+     * @return array<string,string> champ Dolibarr -> compte, seuls les résolus
+     */
+    protected function resolveAccountingCodes($ref, $family)
+    {
+        $codes = isset($this->famCompta[$family]) ? $this->famCompta[$family] : array();
+        if (isset($this->artCompta[$ref])) {
+            $codes = array_merge($codes, $this->artCompta[$ref]);
+        }
+
+        return $codes;
     }
 
     /**
@@ -589,6 +732,28 @@ class MigrationProduct extends AeroMigrationRunner
                 return 'updated';
             }
 
+            if (!empty($this->onlyFields) && $this->onlyFields === array('accountancy')) {
+                $wanted = $this->resolveAccountingCodes(trim((string) $row->AR_Ref), trim((string) $row->FA_CodeFamille));
+                if (empty($wanted)) {
+                    $this->accountingNone++;
+                    return 'skipped';
+                }
+
+                $current = $this->currentAccountancyCodes($existingId);
+                if ($current === null) {
+                    return 'updated'; // illisible : le passage réel tranchera
+                }
+                foreach ($wanted as $field => $code) {
+                    if ($current[$field] !== $code) {
+                        $this->accountingAligned++;
+                        return 'updated';
+                    }
+                }
+
+                $this->accountingAlreadyOk++;
+                return 'skipped';
+            }
+
             return 'updated';
         }
 
@@ -647,6 +812,10 @@ class MigrationProduct extends AeroMigrationRunner
 
             if ($this->writes('status')) {
                 $touched = $this->applyAddStatus($product, $row) || $touched;
+            }
+
+            if ($this->writes('accountancy')) {
+                $touched = $this->applyAccountancyCodes($product, $row) || $touched;
             }
 
             // En réécriture ciblée, un produit dont la valeur était déjà juste n'a rien reçu :
@@ -840,10 +1009,12 @@ class MigrationProduct extends AeroMigrationRunner
     /**
      * Volets réécrivables isolément par `--only`.
      *
-     *   fields    les champs de la fiche article, via mapFields() puis update()
-     *   category  le rattachement aux catégories
-     *   datec     la date de création, reprise de AR_DateCreation
-     *   status    le couple disponibilité/suivi, depuis les champs numériques d'ADD
+     *   fields      les champs de la fiche article, via mapFields() puis update()
+     *   category    le rattachement aux catégories
+     *   datec       la date de création, reprise de AR_DateCreation
+     *   status      le couple disponibilité/suivi, depuis les champs numériques d'ADD
+     *   accountancy les six codes comptables, depuis f_artcompta et f_famcompta —
+     *               écrits en direct, sans update() ni trigger
      *
      * `datec` est le cas qui a motivé l'option : `Product::update()` n'écrit jamais `datec`,
      * seul `setValueFrom()` le peut. Rejouer tout le mapping de 15 909 articles pour poser une
@@ -853,7 +1024,7 @@ class MigrationProduct extends AeroMigrationRunner
      */
     public function supportedOnlyFields()
     {
-        return array('fields', 'category', 'datec', 'status');
+        return array('fields', 'category', 'datec', 'status', 'accountancy');
     }
 
     /**
@@ -967,6 +1138,87 @@ class MigrationProduct extends AeroMigrationRunner
         }
 
         $this->statusAligned++;
+
+        return true;
+    }
+
+    /**
+     * Aligne les codes comptables de la fiche sur ceux de la source.
+     *
+     * C'est le pendant ciblé du remplissage fait par mapFields() : lecture SQL des six
+     * colonnes, comparaison, et UPDATE direct des seuls champs en écart — sans passer par
+     * `Product::update()`, dont le trigger PRODUCT_MODIFY mettrait quinze mille produits
+     * dans la file de synchronisation boutique pour des champs qu'elle ne publie pas.
+     *
+     * Un champ que la source ne résout pas n'est pas vidé (voir mapFields). Sur un passage
+     * complet, mapFields a déjà écrit les codes via update() : la comparaison constate
+     * l'alignement et ne réécrit rien.
+     *
+     * @param  Product  $product Produit persisté
+     * @param  stdClass $row     Ligne source
+     * @return bool              Vrai si au moins un champ a été écrit
+     * @throws Exception         Si l'écriture échoue
+     */
+    /**
+     * Les six codes comptables actuellement en base pour un produit.
+     *
+     * Lu en SQL plutôt que sur l'objet : la simulation de `--only=accountancy` ne charge pas
+     * la fiche, et au passage réel mapFields() a pu écraser les valeurs en mémoire.
+     *
+     * @param  int $productId Produit
+     * @return array<string,string>|null champ -> valeur, null si illisible
+     */
+    protected function currentAccountancyCodes($productId)
+    {
+        $fields = array('accountancy_code_sell', 'accountancy_code_sell_intra', 'accountancy_code_sell_export',
+            'accountancy_code_buy', 'accountancy_code_buy_intra', 'accountancy_code_buy_export');
+
+        $sql   = 'SELECT '.implode(', ', $fields).' FROM '.MAIN_DB_PREFIX.'product WHERE rowid = '.((int) $productId);
+        $resql = $this->db->query($sql);
+        if (!$resql || !($obj = $this->db->fetch_object($resql))) {
+            return null;
+        }
+        $this->db->free($resql);
+
+        $current = array();
+        foreach ($fields as $field) {
+            $current[$field] = trim((string) $obj->$field);
+        }
+
+        return $current;
+    }
+
+    protected function applyAccountancyCodes(Product $product, $row)
+    {
+        $wanted = $this->resolveAccountingCodes(trim((string) $row->AR_Ref), trim((string) $row->FA_CodeFamille));
+        if (empty($wanted)) {
+            $this->accountingNone++;
+            return false;
+        }
+
+        $current = $this->currentAccountancyCodes((int) $product->id);
+        if ($current === null) {
+            throw new Exception('Codes comptables illisibles sur '.$product->ref.' : '.$this->db->lasterror());
+        }
+
+        $sets = array();
+        foreach ($wanted as $field => $code) {
+            if ($current[$field] !== $code) {
+                $sets[] = $field." = '".$this->db->escape($code)."'";
+            }
+        }
+
+        if (empty($sets)) {
+            $this->accountingAlreadyOk++;
+            return false;
+        }
+
+        $sql = 'UPDATE '.MAIN_DB_PREFIX.'product SET '.implode(', ', $sets).' WHERE rowid = '.((int) $product->id);
+        if (!$this->db->query($sql)) {
+            throw new Exception('Écriture des codes comptables refusée sur '.$product->ref.' : '.$this->db->lasterror());
+        }
+
+        $this->accountingAligned++;
 
         return true;
     }
@@ -1170,6 +1422,18 @@ class MigrationProduct extends AeroMigrationRunner
         if ($customCode !== '' && strcasecmp($customCode, 'undefined') !== 0
             && (!$fillOnly || empty($product->customcode))) {
             $product->customcode = $customCode;
+        }
+
+        // ── Codes comptables ───────────────────────────────────────────────
+        // Résolus depuis f_artcompta avec repli sur la famille (f_famcompta), à la manière
+        // de Sage. Un champ que la source ne résout pas n'est jamais vidé : rien d'autre
+        // n'alimente ces colonnes, et un code posé à la main dans Dolibarr doit survivre
+        // aux rejeux. `create()` et `update()` les persistent nativement (llx_product,
+        // pas de perentity ici) et leur appliquent le même `clean_account()`.
+        foreach ($this->resolveAccountingCodes($ref, $family) as $field => $code) {
+            if (!$fillOnly || empty($product->$field)) {
+                $product->$field = $code;
+            }
         }
 
         // ── Garantie ───────────────────────────────────────────────────────
@@ -1490,6 +1754,34 @@ class MigrationProduct extends AeroMigrationRunner
                 $lines[] = '  '.str_pad((string) $this->statusUnqualified, 6, ' ', STR_PAD_LEFT)
                     .'  jamais qualifié(s) par la surcouche ADD, déjà vide(s) : à qualifier dans ADD'
                     .' (rapports/ARTICLES_A_QUALIFIER_ADD_*.csv)';
+            }
+        }
+
+        if ($this->accountingAligned > 0 || $this->accountingAlreadyOk > 0 || $this->accountingNone > 0
+            || !empty($this->accountingUnknown)) {
+            if ($lines) {
+                $lines[] = '';
+            }
+            $lines[] = 'Codes comptables (f_artcompta, repli famille f_famcompta)';
+            if ($this->accountingAligned > 0) {
+                $lines[] = '  '.str_pad((string) $this->accountingAligned, 6, ' ', STR_PAD_LEFT)
+                    .'  produit(s) dont les codes ont été écrits ou corrigés';
+            }
+            if ($this->accountingAlreadyOk > 0) {
+                $lines[] = '  '.str_pad((string) $this->accountingAlreadyOk, 6, ' ', STR_PAD_LEFT)
+                    .'  déjà conforme(s)';
+            }
+            if ($this->accountingNone > 0) {
+                $lines[] = '  '.str_pad((string) $this->accountingNone, 6, ' ', STR_PAD_LEFT)
+                    .'  article(s) sans code résoluble : fiche laissée telle quelle';
+            }
+            if (!empty($this->accountingUnknown)) {
+                arsort($this->accountingUnknown);
+                $lines[] = '  '.str_pad((string) count($this->accountingUnknown), 6, ' ', STR_PAD_LEFT)
+                    .'  code(s) Sage absent(s) du plan comptable actif, repris quand même :';
+                foreach ($this->accountingUnknown as $code => $nb) {
+                    $lines[] = '            '.str_pad($code, 14).$nb.' ligne(s)';
+                }
             }
         }
 

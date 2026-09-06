@@ -200,6 +200,14 @@ function serverVariable($db, $name)
     return $obj ? (string) $obj->Value : '';
 }
 
+// LOAD DATA INFILE résout un chemin relatif par rapport au datadir du serveur
+// MySQL, pas au dossier courant du script : une source relative trouverait les
+// fichiers en PHP puis échouerait à chaque chargement. On la rend absolue.
+$realSource = realpath($source);
+if ($realSource !== false) {
+    $source = str_replace('\\', '/', $realSource);
+}
+
 $securePriv = str_replace('\\', '/', serverVariable($db, 'secure_file_priv'));
 
 if ($securePriv === 'NULL') {
@@ -679,10 +687,20 @@ foreach ($jobs as $table => $job) {
     $useModel = modelMatches($db, $model, $table, $cols);
     $dateCols = array();
     $ddl = '';
+    $inferred = array();
+
+    // En ligne, base unique : le modèle peut être la base de destination elle-même
+    // (tables créées au préalable depuis un dump de structure). La table en place
+    // EST alors le modèle — la refaire par DROP + CREATE LIKE la détruirait, et
+    // MySQL refuse de toute façon un CREATE LIKE d'une table sur elle-même
+    // (« Not unique table/alias »). On la vide au lieu de la refaire.
+    $modelIsDest = ($useModel && $model === $database);
 
     if ($useModel) {
-        $ddl = "CREATE TABLE `".$database."`.`".$table."` LIKE `".$model."`.`".$table."`";
-        $origine = 'modèle '.$model;
+        if (!$modelIsDest) {
+            $ddl = "CREATE TABLE `".$database."`.`".$table."` LIKE `".$model."`.`".$table."`";
+        }
+        $origine = 'modèle '.$model.($modelIsDest ? ' (en place, vidée)' : '');
         $rowsFile = null;
         $ragged = 0;
     } else {
@@ -736,7 +754,7 @@ foreach ($jobs as $table => $job) {
     }
 
     if ($dryrun) {
-        echo "\n".$ddl.";\n";
+        echo "\n".($modelIsDest ? "TRUNCATE TABLE `".$database."`.`".$table."`" : $ddl).";\n";
         if ($rowsFile !== null) {
             echo "   -- ".$rowsFile." enregistrement(s)"
                 .($ragged > 0 ? ", ".$ragged." de largeur inattendue" : '')."\n";
@@ -746,9 +764,12 @@ foreach ($jobs as $table => $job) {
         continue;
     }
 
-    $db->query("DROP TABLE IF EXISTS `".$database."`.`".$table."`");
-
-    $created = $db->query($ddl);
+    if ($modelIsDest) {
+        $created = $db->query("TRUNCATE TABLE `".$database."`.`".$table."`");
+    } else {
+        $db->query("DROP TABLE IF EXISTS `".$database."`.`".$table."`");
+        $created = $db->query($ddl);
+    }
 
     // Une ligne encore trop large : on resserre le budget et on réessaie, ce qui
     // bascule en TEXT les colonnes suivantes par ordre de largeur. Les paliers

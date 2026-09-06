@@ -31,12 +31,19 @@ Dans l'ordre inverse, rien de tout cela n'existe. Deux réserves :
   **réactivé après déploiement** de sa 1.13.0+ — l'extrafield `aerotb_avail_restore` des
   produits composés est créé à l'activation.
 - **aeromigration 0.15.0 ou au-delà.**
+- **Le plan comptable PCG26-AERO actif** (`CHARTOFACCOUNTS`) : depuis la 0.33.0, `product`
+  reprend les six codes comptables de la fiche (f_artcompta, repli famille) et contrôle
+  leur existence dans le plan actif ; sans plan, les codes sont repris sans contrôle.
 - **Un export ADD frais du jour J** (zip de CSV `advance_*`) : la procédure de génération est
   acquise, l'export se fait à volonté. Ne pas partir d'un export vieux de plusieurs jours —
   tout le périmètre de la purge se recalcule depuis cette base.
 - **`secure_file_priv`** : `import_add_csv.php` passe par `LOAD DATA INFILE` ; les CSV doivent
   être déposés sous le dossier que le serveur MySQL autorise (le script le vérifie et indique
   le chemin attendu).
+- **UN SEUL processus de reprise à la fois** — toujours `ps aux | grep migrate` avant de
+  (re)lancer : deux passages parallèles ne voient pas ce que l'autre commite, l'idempotence
+  ne protège pas et chaque pièce sort en double (vécu au jour J : 24 514 factures
+  dédoublées par un `nohup` relancé par-dessus le premier, purge intégrale + rejeu).
 - **PHP CLI : `-d memory_limit=1024M -d max_execution_time=0` sur chaque script.** Sous Linux,
   `max_execution_time` compte le temps **CPU** : un passage massivement calculatoire (reprise
   de dizaines de milliers de factures) meurt à mi-course avec la limite Plesk de 120 s, alors
@@ -77,6 +84,17 @@ productkit`), chacune en `--dry-run` d'abord.
 
 Points d'attention hérités du test :
 
+- **Avant `category`, sur une instance vierge jamais connectée à la boutique** (vécu au
+  jour J, 05/09) : l'arbre « Boutique Aero : Racine » → « Accueil » n'existe pas — c'est
+  Prestasync qui l'avait créé sur le test — et les rubriques partent à la racine, sans
+  liens boutique (`category` lit `llx_prestasync_resource_element` pour adopter mais n'y
+  écrit jamais). Créer l'arbre et ses deux liens (ids PrestaShop 1 et 2) en SQL, rejouer
+  `category`, puis poser les liens des rubriques créées depuis `f_catalogue.id_externe`
+  (504/504 renseignés) : `INSERT INTO llx_prestasync_resource_element ... SELECT 1,
+  'categories', TRIM(f.id_externe), 'category_product', c.rowid, NOW() FROM llx_categorie c
+  JOIN f_catalogue f ON c.ref_ext = CONCAT('SAGE:', f.CL_No) ...` — sans quoi Prestasync
+  dédoublerait toute l'arborescence à la réouverture. Le détail des requêtes est dans le
+  ChangeLog 0.33.2 (session du 05/09).
 - **Après `product`, passer `scripts/import_disposuivi.php`** (simulation puis `--confirm`) :
   l'arbitrage client du 03/09 sur la disponibilité et le suivi (fichier
   `migrationdata/disposuivi_migration.csv`). Le rejeu de `product` recrée les
@@ -230,6 +248,6 @@ premier clic, avec le numéro définitif. Au jour J, même principe : renumérot
   rattachées au tiers générique « Clients Anonymisés » (0.16.1) — plus rien à faire au jour J.
 - **Les créances aéroclubs** (2 716,42 € au 18/08) : à recouvrer côté gestion ; leurs factures
   Dolibarr sont conservées et seront renumérotées normalement.
-- **Statuts produits** : la source vivante est `disponibilite_origine`/`suivi_origine` (ids
-  ADD 1-7 = dictionnaires aerotoolbox, ADD 8 = notre 10), pas les champs libres — correctif
-  de `product` à livrer avant le rejeu final (voir ANOMALIES A3).
+- ~~Statuts produits : correctif `disponibilite_origine`/`suivi_origine` à livrer~~ **Livré** :
+  `product` lit la source vivante (ids ADD 1-7 = dictionnaires aerotoolbox, ADD 8 = notre 10),
+  volet de rattrapage `--only=status` disponible (voir ANOMALIES A3).

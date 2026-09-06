@@ -88,6 +88,8 @@ fait autorité. Le script ne pose le rattachement que s'il est vide.
 | A7 | Prix de revient périmé, inférieur au prix d'achat | 2 767 | Coût standard retenu à sa place |
 | A8 | `f_consigne` : stock en dépôt-vente, pas des consignes | 279 | À traiter avec les stocks |
 | A10 | Articles achetés plus cher qu'ils ne sont vendus | 54 | Signalés, non traités |
+| A11 | Codes-barres en double et valeurs de remplissage | 69 + bruit | Posés seulement si libres |
+| A12 | Codes comptables sur 8 chiffres, plan Dolibarr raccourci | 13 codes | Zéros de queue retirés, repli famille |
 
 ### A1. Trois traitements selon l'origine de l'article
 
@@ -387,6 +389,29 @@ dans tous les cas, seul son code-barres manque, et le rapport dénombre les deux
 > Deux garde-fous neutralisés en même temps, sur un environnement plus permissif que la
 > cible. À retenir pour les prochaines reprises : **vérifier les modules activés des deux
 > côtés avant de conclure qu'un script est propre.**
+
+### A12. Codes comptables : huit chiffres côté Sage, plan raccourci côté Dolibarr
+
+`f_artcompta` porte les comptes comptables de l'article, une ligne par type (`ACP_Type` :
+0 vente, 1 achat) et par catégorie comptable (`ACP_Champ`, libellés dans `p_catcompta` :
+1 France, 2 CEE, 3 DOM-TOM, 4 Export/Import, 5 CEE PRO). **13 713 articles sur 16 009 ont
+au moins un compte de vente en propre, 1 829 seulement des comptes d'achat** : le reste
+retombe sur la famille (`f_famcompta`), la cascade native de Sage — l'article prime, la
+famille est le repli.
+
+Trois particularités :
+
+- **Sage écrit sur huit chiffres, le plan Dolibarr est raccourci.** `70700000` côté ADD,
+  `707` dans le plan **PCG26-AERO** (« Plan comptable boutique.aero », `CHARTOFACCOUNTS`).
+  La normalisation retire les zéros de queue, exactement ce que fait le `clean_account()`
+  du cœur ; les 13 codes distincts de la source trouvent tous leur compte dans le plan
+  (vérifié le 05/09/2026). Un code qui n'y serait pas est repris quand même, mais compté
+  et signalé au rapport.
+- **Les catégories 3 (DOM-TOM) et 5 (CEE PRO) n'ont pas d'équivalent** sur la fiche
+  produit Dolibarr (six champs : vente / intra / export × vente / achat). Elles sont
+  laissées de côté — le DOM-TOM porte de toute façon le compte de l'export (`70790000`).
+- **La famille AREAFFECTER (« à réaffecter ») a des comptes NULL** : 46 articles restent
+  sans code résoluble, fiche laissée vide. À réaffecter dans ADD, un rejeu les rattrapera.
 
 ### A9. Des déclinaisons créées en articles indépendants
 

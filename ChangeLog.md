@@ -6,6 +6,122 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.33.3] — 2026-09-06
+
+### Corrigé — le chrono PHP réarmé en plein passage ne tue plus les reprises
+
+`commonGenerateDocument()` du cœur pose un `@set_time_limit(120)` « pour les PDF » : dès
+qu'un chemin de reprise le traverse, le chrono que `-d max_execution_time=0` avait désarmé
+se réarme, et 120 s CPU plus tard PHP abat le processus — `invoice` est mort ainsi à 77 %
+au jour J (le curseur a permis de reprendre sans perte). Le runner se re-désarme désormais
+(`set_time_limit(0)`) au début de chaque tranche.
+
+Consigné au passage, même nuit : le module **Journaux inaltérables (blockedlog)**, actif
+sur la production (livré avec TakePOS), sérialise chaque validation de facture par un
+`SELECT ... FOR UPDATE` sur `llx_blockedlog` — deadlock (`DB_ERROR_1213`) constaté, et il
+chaînerait les ~110 000 pièces historiques dans le journal légal. **À désactiver pendant la
+reprise**, et à réactiver seulement à l'ouverture du flux réel (décision avec l'associé :
+c'est le journal légal de la caisse).
+
+## [0.33.2] — 2026-09-05
+
+### Corrigé — `thirdparty` : les fournisseurs ne s'inscrivent plus comme clients boutique
+
+`registerPrestaLink()` liait tout tiers porteur d'un `id_externe` numérique — or celui d'un
+fournisseur désigne son id dans `ps_supplier`, pas un client : F193 « AERO SENSE »
+(`id_externe` 193) se retrouvait lié au client boutique 193, qui n'existe pas. Constaté au
+jour J sur l'instance neuve ; invisible jusque-là parce que sur les rejeux précédents chaque
+id fournisseur était déjà revendiqué par un vrai client passé avant lui (garde « identifiant
+déjà attribué »). Le lien n'est plus posé que pour `CT_Type = 0` ; les fournisseurs relèvent
+de `relink_prestasync.php` (étape 6) et de `llx_prestasync_supplier`, comme documenté.
+
+Nettoyage des liens fautifs déjà posés :
+```sql
+DELETE pc FROM llx_prestasync_customer pc
+JOIN llx_societe s ON s.rowid = pc.fk_soc_doli
+WHERE s.ref_ext LIKE 'SAGE:F%';
+```
+
+### Consigné — instance vierge : l'arbre boutique des catégories se crée à la main
+
+Même passage jour J : sans Prestasync jamais démarré, ni « Boutique Aero : Racine » →
+« Accueil » ni aucun lien `llx_prestasync_resource_element` n'existent. Séquence appliquée —
+purge de `category`, création de l'ancre et de ses liens (ids PrestaShop 1 et 2), rejeu,
+puis pose des liens des rubriques depuis `f_catalogue.id_externe` :
+
+```sql
+INSERT INTO llx_categorie (label, type, visible, entity, fk_parent)
+VALUES ('Boutique Aero : Racine', 0, 1, 1, 0);
+SET @racine = LAST_INSERT_ID();
+INSERT INTO llx_categorie (label, type, visible, entity, fk_parent)
+VALUES ('Accueil', 0, 1, 1, @racine);
+SET @accueil = LAST_INSERT_ID();
+INSERT INTO llx_prestasync_resource_element
+  (fk_presta, presta_resource, presta_resource_id, dol_element, dol_element_id, date_creation)
+VALUES (1, 'categories', 1, 'category_product', @racine, NOW()),
+       (1, 'categories', 2, 'category_product', @accueil, NOW());
+
+-- après le rejeu de category :
+INSERT INTO llx_prestasync_resource_element
+  (fk_presta, presta_resource, presta_resource_id, dol_element, dol_element_id, date_creation)
+SELECT 1, 'categories', TRIM(f.id_externe), 'category_product', c.rowid, NOW()
+FROM llx_categorie c
+JOIN f_catalogue f ON c.ref_ext = CONCAT('SAGE:', f.CL_No)
+WHERE c.type = 0 AND TRIM(f.id_externe) <> ''
+  AND NOT EXISTS (SELECT 1 FROM llx_prestasync_resource_element r
+                  WHERE r.fk_presta = 1 AND r.presta_resource = 'categories'
+                    AND r.presta_resource_id = TRIM(f.id_externe));
+```
+
+## [0.33.1] — 2026-09-05
+
+### Corrigé — `import_add_csv.php` : deux pièges du passage en ligne (base unique)
+
+Constatés au jour J, sur le premier lancement serveur :
+
+- **`--model` égal à `--database`** (les 20 tables créées au préalable depuis le dump de
+  structure, dans la base même de Dolibarr) : le script faisait `DROP TABLE` puis
+  `CREATE TABLE ... LIKE` de la table sur elle-même — refusé par MySQL
+  (« Not unique table/alias »)… après que le DROP a détruit la table. La table en place
+  est désormais reconnue comme étant le modèle : elle est **vidée** (`TRUNCATE`) au lieu
+  d'être refaite, et le rapport l'affiche (« modèle X (en place, vidée) »).
+- **`--source` relatif** : PHP trouvait les fichiers, mais `LOAD DATA INFILE` résout un
+  chemin relatif par rapport au datadir du serveur MySQL — chaque chargement aurait
+  échoué. La source passe par `realpath()` dès le départ.
+
+Au passage, l'avertissement PHP 8 « Undefined variable $inferred » du chemin modèle.
+
+## [0.33.0] — 2026-09-05
+
+### Ajouté — `product` : reprise des codes comptables (volet `--only=accountancy`)
+
+Les six codes comptables de la fiche produit — vente, vente intracommunautaire, vente à
+l'export, achat, achat intracommunautaire, achat import — sont désormais repris de
+`f_artcompta`, avec le repli sur la famille (`f_famcompta`) qui est la mécanique native
+de Sage : 13 713 articles portent au moins un compte de vente en propre, 1 829 des comptes
+d'achat, la famille couvre le reste.
+
+La correspondance des catégories comptables (`p_catcompta`) : 1 France → le code principal,
+2 CEE → intracommunautaire, 4 Export/Import → export. Les catégories 3 (DOM-TOM) et
+5 (CEE PRO) n'ont pas d'équivalent sur la fiche Dolibarr et sont laissées de côté — le
+DOM-TOM porte de toute façon le compte de l'export. Sage écrit les comptes sur huit
+chiffres (`70700000`) là où le plan **PCG26-AERO** de Dolibarr les raccourcit (`707`) : la
+normalisation retire les zéros de queue, comme le `clean_account()` du cœur ; les 13 codes
+distincts de la source trouvent tous leur compte dans le plan. Un code absent du plan
+serait repris quand même, mais compté et signalé au rapport.
+
+Deux chemins d'écriture :
+
+- **`mapFields()`** pose les codes à la création et à l'adoption (seuls les champs vides,
+  en adoption) : un rejeu complet de `product` les embarque sans étape supplémentaire ;
+- **`--only=accountancy`**, le volet ciblé pour l'existant : lecture SQL des six colonnes,
+  comparaison, UPDATE direct des seuls champs en écart — sans `Product::update()` ni
+  trigger, la boutique ne publie pas ces champs. Un champ que la source ne résout pas
+  n'est jamais vidé : un code posé à la main survit aux rejeux.
+
+Passage local du 05/09 : 15 467 produits servis, 46 sans code résoluble (famille
+AREAFFECTER, comptes NULL côté Sage), 0 erreur ; second passage : 0 écriture.
+
 ## [0.32.0] — 2026-09-03
 
 ### Ajouté — `import_disposuivi.php` : disponibilité et suivi arbitrés par le client

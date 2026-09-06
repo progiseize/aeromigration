@@ -56,6 +56,13 @@ correspondent pas — et un client dont le niveau n'a pas encore de prix se voit
 La synchronisation est rallumée et **rejouée** une fois les deux passés : la boutique publie
 `llx_product.price`, c'est-à-dire le niveau 1, qui vient de changer de sens.
 
+`product` reprend aussi les **six codes comptables** de la fiche (vente, vente intra, vente
+export, achat, achat intra, achat import) depuis `f_artcompta`, avec le repli famille
+(`f_famcompta`) propre à Sage. Les comptes Sage à huit chiffres (`70700000`) sont ramenés à
+la forme du plan **PCG26-AERO** (`707`) en retirant les zéros de queue — le `clean_account()`
+du cœur. Pour poser les codes sur une base déjà reprise sans rejouer toute la fiche :
+`php migrate.php product --only=accountancy` (écriture directe, sans trigger).
+
 `packaging` complète les lignes de tarif que `supplierprice` vient de créer : les
 269 conditionnements d'ADD (`AF_Colisage > 1`) vont dans les trois extrafields
 d'aerotoolbox 1.21.0, **en informatif** — ADD ne dit pas si un conditionnement contraint,
@@ -218,8 +225,11 @@ php migrate.php product --only=datec --dry-run    mesure le rattrapage
 php migrate.php product --only=datec              l'applique
 ```
 
-`product` accepte `fields` (la fiche), `category` (les catégories) et `datec` (la date de
-création, que `Product::update()` n'écrit jamais — seul `setValueFrom()` le peut).
+`product` accepte `fields` (la fiche), `category` (les catégories), `datec` (la date de
+création, que `Product::update()` n'écrit jamais — seul `setValueFrom()` le peut), `status`
+(le couple disponibilité/suivi depuis les champs numériques d'ADD) et `accountancy` (les six
+codes comptables depuis `f_artcompta`, repli famille `f_famcompta` — écrits en direct, sans
+trigger).
 
 L'option **implique `--update`** et ne visite **que l'existant** : aucun objet n'est créé, « ne
 toucher qu'un champ » n'ayant de sens que sur ce qui existe déjà. Les scripts qui ne la gèrent
