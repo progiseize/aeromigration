@@ -6,6 +6,29 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.34.0] — 2026-09-06
+
+### Ajouté — `scripts/import_prix_revient.php` : le prix de revient depuis le fichier client
+
+Pose `llx_product.cost_price` depuis `migrationdata/prix_revient_migration.csv` (16 008
+lignes, Windows-1252, « ; », montants « 69,92 € ») — le fichier client fait foi, ADD ne
+portant pas l'information de façon fiable. Même squelette qu'`import_disposuivi` :
+appariement par référence canonique (zéros de tête neutralisés), index préchargé en une
+requête, écriture par `setValueFrom()` (pas de `update()` complet : PRODUCT_MODIFY partirait
+en synchronisation boutique, et `fetch()` recharge les sept niveaux de prix), transaction,
+rejouable (valeur conforme au demi-centime = pas d'écriture).
+
+Arbitrage client du 06/09/2026 sur les montants à zéro : **posés tels quels** — soit
+l'article n'a pas de stock (valorisation au premier réappro), soit c'est du vieux stock
+déprécié, et zéro est alors le bon prix de revient. Le fichier en compte 2 828 (les
+« 1 885 » de l'analyse du 03/09 excluaient emplacements et articles techniques).
+
+Deux populations traitées sans bruit : 115 montants vides = les « PRODUIT COMPOSE » non
+valorisés (coût = composants, rien d'écrit) ; 395 références 90000+ absentes = les
+emplacements supprimés par `import_disposuivi` (état voulu, pas un écart).
+
+Se rejoue après tout rejeu de `product`, comme les autres scripts sur fichier client.
+
 ## [0.33.3] — 2026-09-06
 
 ### Corrigé — le chrono PHP réarmé en plein passage ne tue plus les reprises

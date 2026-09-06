@@ -194,9 +194,13 @@ clé stable, Prestasync les recrée à la demande sans dégât.
 
 ### 7. Rattrapage Prestasync borné à la bascule
 
-Rattraper commandes et factures boutique **à partir de juin 2026 seulement** (borne exacte à
-fixer avec l'associé au vu de la date de bascule effective du flux web, mesurée au 11/06/2026
-sur les données). Jamais de rattrapage intégral.
+Rattraper commandes et factures boutique **à partir de la date de l'export ADD seulement** —
+au jour J : 05/09/2026 18h53. Constat vérifié le 06/09 sur les données fraîches : Addvance a
+continué de rapatrier le flux web dans ADD après la bascule de juin (les 11 commandes web du
+05/09 figurent toutes dans l'export, jusqu'à celle de 18h41) — la reprise couvre donc tout,
+et le rattrapage se réduit à la fenêtre export → réouverture, plus l'alignement des statuts
+récents sur la vérité boutique (règle du 18/08 : depuis juin, Prestasync fait foi). Jamais de
+rattrapage intégral.
 
 ### 8. Rouvrir le flux vivant
 
