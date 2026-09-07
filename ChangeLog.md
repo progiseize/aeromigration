@@ -6,6 +6,27 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.35.0] — 2026-09-08
+
+### Ajouté — `scripts/ventilate_declinaisons.php` : stock et dispo/suivi des déclinaisons
+
+ADD tenait le stock par déclinaison dans les gammes Sage (`f_gamstock`), jamais lues par
+la reprise : les parents ont reçu le total, les déclinaisons sont nées à zéro. Le fichier
+`migrationdata/ventilation_gammes_20260905.csv` (généré depuis l'export du 05/09 :
+f_gamstock × f_artgamme × combinaisons boutique par signature de valeurs, 565/572
+résolues — 4 lignes d'un article hors boutique, 9 négatives, 1 « rouge » 14120 sans
+combinaison : 24 unités à arbitrer) alimente deux passes :
+
+1. **Ventilation** : sortie du parent (`ref_ext SAGE:`) / entrée sur la déclinaison (lien
+   `fk_product_presta_attribute`), mouvements tracés, `--entrepot=N` obligatoire. Plafond
+   au stock restant du parent (la dérive post-05/09 est signalée, jamais inventée), les
+   négatives ADD ignorées et signalées, une déclinaison déjà pourvue n'est pas re-ventilée.
+2. **Dispo/suivi** : toute déclinaison `#XXXXX-NNN` hérite des extrafields aerotoolbox de
+   son parent `#XXXXX` (l'arbitrage disposuivi vaut pour la famille), comparaison avant
+   écriture.
+
+Transaction globale : la moindre erreur annule tout. Simulation par défaut.
+
 ## [0.34.2] — 2026-09-08
 
 ### Ajouté — `scripts/import_declinaisons.php` : import de masse des déclinaisons via Prestasync

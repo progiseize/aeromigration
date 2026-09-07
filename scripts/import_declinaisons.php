@@ -172,7 +172,10 @@ foreach ($ids as $ps) {
 
     // Garde-fou : un produit sans déclinaisons passerait dans le chemin « produit simple »
     // de syncToDolibarr, qui met à jour la fiche Dolibarr depuis la boutique. Refusé.
-    if (!$prestaProduct->useCombinations()) {
+    // On ne se fie PAS à useCombinations() : il repose sur le champ `product_type`, que le
+    // webservice de cette boutique ne renvoie pas (vide pour tous) — la liste des
+    // combinaisons dans `associations` est la source fiable, c'est elle que la fiche UI lit.
+    if (empty($prestaProduct->associations->combinations)) {
         $stats['sans_combinaisons']++;
         printf("  %-7d ÉCARTÉ : pas de déclinaisons (« %s »)\n", $ps, dol_trunc((string) $prestaProduct->getTradValue($prestaProduct->name), 40));
         continue;
@@ -205,7 +208,21 @@ foreach ($ids as $ps) {
     }
 
     $prestaProduct->clearErrors();
-    $ok    = $prestaProduct->syncToDolibarr($user);
+    // Boucle reprise de syncToDolibarr() (branche combinaisons, lignes 420-433) : on
+    // l'appelle en direct parce que syncToDolibarr refait le test useCombinations()
+    // défaillant et enverrait le parent dans le chemin « produit simple ». La liste de
+    // champs est celle que syncToDolibarr résout depuis ['all'] — sans elle, une
+    // déclinaison DÉJÀ liée sortirait en erreur « Update fail » au lieu d'être resynchronisée.
+    $fieldsToUpdate = array('reference', 'label', 'price', 'weight', 'image', 'clear_images', 'buy-price', 'categories', 'barcode', 'url');
+    if (!getDolGlobalInt('PRESTASYNC_PRODUCT_NO_DESC')) {
+        $fieldsToUpdate[] = 'description';
+    }
+    $ok = true;
+    foreach ($prestaProduct->combinations as $combination) {
+        if (!$prestaProduct->syncCombinationToDolibarr($user, $combination, 0, $fieldsToUpdate)) {
+            $ok = false;
+        }
+    }
     $after = decl_links_count($db, $ps);
     $stats['crees'] += max(0, $after - $before);
     if (!$ok) {
