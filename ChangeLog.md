@@ -6,6 +6,50 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.34.2] — 2026-09-08
+
+### Ajouté — `scripts/import_declinaisons.php` : import de masse des déclinaisons via Prestasync
+
+L'action de masse « startSync » de la liste Prestasync mettrait à jour depuis la boutique
+tout produit SANS déclinaisons coché par erreur (libellé, prix, description). Le script
+prend la liste des parents (`--ids=` ou `--file=`, extraite de `ps_product_attribute`),
+ÉCARTE d'office tout produit sans déclinaisons, et n'atteint que le chemin
+« combinaisons » de `PrestaProduct::syncToDolibarr()` — qui ne touche jamais la fiche du
+parent. Simulation par défaut (état des lieux : nb de déclinaisons, déjà liées, réfs
+vides qui échoueraient), `--confirm` pour appliquer ; compte les liens réellement créés
+dans `llx_prestasync_product`.
+
+### Ajouté — `data/categories/liaison_resource_element_categories_prod_20260908.sql`
+
+Reconstruction des liens catégories de `llx_prestasync_resource_element` (prod, table
+vide) par matchage test → prod (clé `ref_ext SAGE:n`, repli libellé) : 489/497 liens,
+validé de bout en bout en local (pré-contrôle 0, post-contrôles 489 et 0 orphelin).
+8 orphelins documentés en fin de fichier (5 catégories supprimées d'ADD depuis juin,
+3 créées à la main sur le test). Les ressources `product_options`/`product_option_values`
+ne sont volontairement PAS copiées (la reprise native aeropresta les recrée), et
+`manufacturers` attend les dumps `c_aerotoolbox_brand` des deux instances.
+
+## [0.34.1] — 2026-09-06
+
+### Ajouté — `data/liaison_prestasync_commandes_20260906.sql` : pré-peuplement des liens commandes
+
+La reprise ne pose pas les liens `llx_prestasync_order` ; sans eux, chaque commande à
+cheval se rapproche à la main dans Prestasync. Or l'identifiant PrestaShop est déjà dans
+Dolibarr : ADD enregistrait chaque commande web sous la pièce `CI-<id_order>`, reprise en
+`ref_ext` (`SAGE:CI-265372`). Le fichier pose donc les liens en un INSERT-SELECT pur
+(fk_presta = 1, la ligne de connexion à reconfigurer), avec pré/post-contrôles.
+
+Validation locale du 06/09 (photos ADD 03/09 × prestaprod 05/09) : 55 430 pièces
+principales, **0 id inconnu de `ps_orders`, 0 doublon** ; 7 `DO_Ref` discordants = champ
+libre retouché dans ADD, la pièce fait foi. Les ~350 pièces suffixées (`CI-265368-1`,
+reliquats ADD d'une même commande web) sont exclues : la recherche Prestasync
+(`fk_presta` + `fk_order_presta`) doit retomber sur la pièce principale, unique.
+Rejouable — les commandes ou id déjà liés sont écartés par LEFT JOIN.
+
+Effet de bord bienvenu : le filet anti-doublon du rattrapage ne repose plus sur la
+recherche par référence pour les commandes liées — le lien par id prime. La discipline
+« `renumber_customer_orders` en dernier » reste de mise (pièces suffixées, prudence).
+
 ## [0.34.0] — 2026-09-06
 
 ### Ajouté — `scripts/import_prix_revient.php` : le prix de revient depuis le fichier client
@@ -26,8 +70,6 @@ déprécié, et zéro est alors le bon prix de revient. Le fichier en compte 2 8
 Deux populations traitées sans bruit : 115 montants vides = les « PRODUIT COMPOSE » non
 valorisés (coût = composants, rien d'écrit) ; 395 références 90000+ absentes = les
 emplacements supprimés par `import_disposuivi` (état voulu, pas un écart).
-
-Se rejoue après tout rejeu de `product`, comme les autres scripts sur fichier client.
 
 ## [0.33.3] — 2026-09-06
 
