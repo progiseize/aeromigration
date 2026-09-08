@@ -215,6 +215,26 @@ while ($resql && ($o = $db->fetch_object($resql))) {
 }
 
 
+// Dispo/suivi des parents, lus AVANT tout mouvement : la ventilation vide les parents, et
+// si l'autostop d'aerotoolbox (< 1.28.1) les basculait en rupture, une lecture tardive
+// ferait hériter ce statut de rupture aux enfants. Photo prise ici, traitée en passe 2.
+$sqlDispo = "SELECT c.rowid child_id, c.ref child_ref,"
+    ." ce.aerotb_availability c_avail, ce.aerotb_tracking c_track,"
+    ." p.rowid parent_id, pe.aerotb_availability p_avail, pe.aerotb_tracking p_track"
+    ." FROM ".MAIN_DB_PREFIX."product c"
+    ." INNER JOIN ".MAIN_DB_PREFIX."prestasync_product pp ON pp.fk_product_doli = c.rowid AND pp.fk_product_presta_attribute > 0"
+    ." LEFT JOIN ".MAIN_DB_PREFIX."product_extrafields ce ON ce.fk_object = c.rowid"
+    ." LEFT JOIN ".MAIN_DB_PREFIX."product p ON p.ref = SUBSTRING_INDEX(c.ref, '-', 1) AND p.entity IN (".getEntity('product').")"
+    ." LEFT JOIN ".MAIN_DB_PREFIX."product_extrafields pe ON pe.fk_object = p.rowid"
+    ." WHERE c.entity IN (".getEntity('product').") AND c.ref REGEXP '^#[0-9]{5}-[0-9]{3}\$'"
+    ." GROUP BY c.rowid";
+$resql = $db->query($sqlDispo);
+$dispoRows = array();
+while ($resql && ($o = $db->fetch_object($resql))) {
+    $dispoRows[] = $o;
+}
+
+
 /*
  * PASSE 1 — ventilation du stock.
  */
@@ -375,23 +395,7 @@ $stats2 = array('vues' => 0, 'dispo_posees' => 0, 'suivi_poses' => 0, 'conformes
     'parent_absent' => 0, 'erreur' => 0);
 $samples2 = array('erreur' => array(), 'parent_absent' => array());
 
-$sql = "SELECT c.rowid child_id, c.ref child_ref,"
-    ." ce.aerotb_availability c_avail, ce.aerotb_tracking c_track,"
-    ." p.rowid parent_id, pe.aerotb_availability p_avail, pe.aerotb_tracking p_track"
-    ." FROM ".MAIN_DB_PREFIX."product c"
-    ." INNER JOIN ".MAIN_DB_PREFIX."prestasync_product pp ON pp.fk_product_doli = c.rowid AND pp.fk_product_presta_attribute > 0"
-    ." LEFT JOIN ".MAIN_DB_PREFIX."product_extrafields ce ON ce.fk_object = c.rowid"
-    ." LEFT JOIN ".MAIN_DB_PREFIX."product p ON p.ref = SUBSTRING_INDEX(c.ref, '-', 1) AND p.entity IN (".getEntity('product').")"
-    ." LEFT JOIN ".MAIN_DB_PREFIX."product_extrafields pe ON pe.fk_object = p.rowid"
-    ." WHERE c.entity IN (".getEntity('product').") AND c.ref REGEXP '^#[0-9]{5}-[0-9]{3}\$'"
-    ." GROUP BY c.rowid";
-$resql = $db->query($sql);
-$rows = array();
-while ($resql && ($o = $db->fetch_object($resql))) {
-    $rows[] = $o;
-}
-
-foreach ($rows as $o) {
+foreach ($dispoRows as $o) {
     $stats2['vues']++;
     if (empty($o->parent_id)) {
         $stats2['parent_absent']++;
@@ -429,6 +433,13 @@ foreach ($rows as $o) {
                 $samples2['erreur'][] = $o->child_ref.' : '.$product->error;
             }
             continue;
+        }
+
+        // « En vente / En achat » suivent le couple posé : updateExtraField ne rejoue pas
+        // la mécanique d'aerotoolbox, on l'appelle donc explicitement (sans push boutique).
+        dol_include_once('/aerotoolbox/lib/aerotoolbox.lib.php');
+        if (function_exists('aerotb_apply_sellbuy_from_combination')) {
+            aerotb_apply_sellbuy_from_combination($db, (int) $o->child_id, (int) $o->p_avail, (int) $o->p_track, false);
         }
     }
     if ($needAvail) {

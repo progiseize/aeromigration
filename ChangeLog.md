@@ -6,6 +6,31 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.35.2] — 2026-09-08
+
+### Ajouté — `scripts/align_sellbuy.php` : « En vente / En achat » alignés sur le couple dispo/suivi
+
+La configuration aerotoolbox (`c_aerotoolbox_combination.dolibarr_sell/buy`) définit les
+statuts Dolibarr voulus par couple, mais seuls l'UI et l'autostop la rejouent : les scripts
+de reprise posaient les extrafields sans jamais toucher `tosell`/`tobuy` — d'où des
+« Commercialisation arrêtée / Non suivi » restés en vente. Le script solde l'écart pour
+tout le catalogue : simulation ventilée par couple (cible + exemples), application en un
+UPDATE ensembliste, mêmes gardes que `aerotb_apply_sellbuy_from_combination()` (couple
+complet, combinaison active du dictionnaire, jamais forcé hors dictionnaire), sans
+déclencheur (pas de tempête de file vers la boutique — l'état boutique se réaligne par le
+moteur « état produit » d'aeropresta). Idempotent.
+
+## [0.35.1] — 2026-09-08
+
+### Corrigé — `ventilate_declinaisons.php` : « En vente / En achat » suivent le couple posé
+
+La passe dispo/suivi écrivait les extrafields par `updateExtraField()`, qui ne rejoue pas
+la mécanique d'aerotoolbox alignant `tosell`/`tobuy` sur les drapeaux du couple
+(`c_aerotoolbox_combination.dolibarr_sell/buy`) : les déclinaisons gardaient leurs statuts
+de création Prestasync. `aerotb_apply_sellbuy_from_combination()` est désormais appelée
+après chaque pose (sans push boutique). Le passage déjà appliqué a été rattrapé par un
+UPDATE SQL d'alignement direct (aperçu + alignement, mêmes drapeaux).
+
 ## [0.35.0] — 2026-09-08
 
 ### Ajouté — `scripts/ventilate_declinaisons.php` : stock et dispo/suivi des déclinaisons
