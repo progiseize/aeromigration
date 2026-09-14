@@ -6,6 +6,27 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.36.0] — 2026-09-14
+
+### Ajouté — `scripts/copy_supplier_prices_to_variants.php` : les déclinaisons héritent des tarifs fournisseurs du parent
+
+Au 11/09, 1 016 des 1 042 déclinaisons n'avaient aucun tarif fournisseur alors que leur parent
+en a — et c'est la fiche enfant qui se commande. Le script comble les trous : pour chaque
+déclinaison et chaque fournisseur du parent absent de l'enfant, il recopie la ligne du parent
+(prix, TVA, remise, délai, conditionnement et extrafields aerotoolbox compris ; jamais le
+code-barres). Un fournisseur déjà présent sur l'enfant n'est pas touché : rejouable, valable
+pour les déclinaisons futures.
+
+Réf fournisseur : Dolibarr impose l'unicité de (réf, fournisseur, quantité), la réf du parent
+ne peut donc pas être recopiée telle quelle. Convention retenue le 14/09 — celle qu'ADD avait
+déjà, code fournisseur puis notre réf entre parenthèses (988 lignes existantes) — prolongée
+aux variantes : `1408 (#10917)` → `1408 (#10917-002)`, `114288` → `114288 (#14121-002)`,
+`#09887` → `#09887-002`. Doublons du parent (197 cas : deux lignes chez le même fournisseur
+à la même quantité, jamais des paliers) : une seule ligne retenue par quantité, celle qui a un
+prix sinon la plus récente, listés au rapport ; `--all-lines` recopie tout. Simulation par
+défaut (1 024 déclinaisons, 1 178 lignes, 37 fournisseurs), `--confirm`, `--parent=REF`,
+`--limit=N` ; INSERT … SELECT sans trigger, transaction globale, `import_key` horodaté.
+
 ## [0.35.2] — 2026-09-08
 
 ### Ajouté — `scripts/align_sellbuy.php` : « En vente / En achat » alignés sur le couple dispo/suivi
