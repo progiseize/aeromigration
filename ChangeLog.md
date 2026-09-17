@@ -6,6 +6,33 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.39.1] — 2026-09-17
+
+### Modifié — `invoice_web_orders.php` : validé sur les dumps prod du 17/09, trois règles de plus
+
+Passage local complet sur la copie prod (Dolibarr + boutique) : 274 commandes depuis le
+1er septembre, 43 factures et 39 règlements, zéro erreur, rejeu à vide. Ce que les données
+fraîches ont appris :
+
+- **Payé sur le site > reste à payer** : plus de plafonnement. Douze factures faites à la
+  main le 07/09 depuis la commande n'ont pas la ligne de port (26,95 € facturés, 32,85 €
+  encaissés) ; poser un règlement plafonné aurait masqué l'écart avec l'encaissement
+  e-Transactions. La commande est listée « facture incomplète, avoir + refacturation à la
+  main » (fichier `factures_port_manquant_20260917.csv`), et un rejeu posera le règlement
+  sur la nouvelle facture.
+- **Commande non payée depuis plus de 30 jours** (état PrestaShop non « payé » : attente de
+  virement, de chèque) et sans facture : non facturée, listée « abandonnée ? » — depuis
+  janvier, onze commandes de mai à août dans ce cas, souvent doublées par une commande payée.
+  À chaud, la facture est faite comme Prestasync l'aurait fait.
+- **Facture d'ADD jamais rattachée** (même client, même montant, dans les 90 jours, liée à
+  aucune commande) : rattachée plutôt que doublée. Aucun cas sur la copie — les huit
+  « candidates » repérées étaient liées à la seconde commande du même client.
+
+Court-circuit sans appel à l'API pour une commande dont la facture liée est soldée : depuis
+janvier, 5 130 commandes en 50 s. Ligne d'avancement. Formats de montants et de dates
+indépendants de l'objet langue (que la génération des PDF retouche en cours de passage).
+`--from=2026-01-01` : 8 factures et 4 règlements (821,75 €) sur la copie du 17/09.
+
 ## [0.39.0] — 2026-09-17
 
 ### Ajouté — `scripts/set_default_supplier.php` : le fournisseur principal ADD devient l'étoile aerotoolbox

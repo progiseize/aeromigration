@@ -24,6 +24,9 @@
  * datée du 1er septembre 2026 ou après (`--from=`), il rejoue ce que Prestasync aurait fait,
  * avec ses propres classes (API PrestaShop, mapping des modes de paiement) :
  *
+ * 0. **Une facture d'ADD jamais rattachée** (même client, même montant, dans les 90 jours,
+ *    liée à aucune commande) : rattachée à la commande plutôt que doublée — la reprise en a
+ *    laissé huit ainsi.
  * 1. **La facture**, si la commande n'en a aucune : `Facture::createFromOrder()`, compte
  *    bancaire de la commande ou du mapping (repli PRESTASYNC_INVOICE_BANK_ACCOUNT), validation
  *    (entrepôt MAIN_DEFAULT_WAREHOUSE), commande classée facturée, PDF (FACTURE_ADDON_PDF).
@@ -41,6 +44,9 @@
  * - Commande Dolibarr brouillon ou annulée : rien.
  * - Commande PrestaShop annulée, remboursée (même partiellement) ou en erreur de paiement :
  *   rien — ce sont des cas à traiter à la main (avoir, remboursement).
+ * - Commande que la boutique ne tient pas pour payée (attente de virement ou de chèque) depuis
+ *   plus de 30 jours et sans facture : rien — abandonnée, souvent doublée par une commande
+ *   payée. À chaud (moins de 30 jours), elle est facturée comme Prestasync l'aurait fait.
  * - Mode de paiement dont le mapping ne crée pas de règlement (virement) : la facture est
  *   faite, le règlement attendu est listé, à pointer à la main comme d'habitude.
  * - Facture existante en brouillon, ou plusieurs factures sur la commande : rien, listé.
@@ -91,6 +97,9 @@ if (!isModEnabled('prestasync')) {
 
 /** Statuts PrestaShop qui interdisent de facturer : annulé, remboursé, erreur de paiement, partiellement remboursé. */
 const PS_STATES_NO_INVOICE = array(6, 7, 8, 15);
+
+/** Au-delà de cet âge, une commande que la boutique ne tient pas pour payée n'est plus facturée. */
+const UNPAID_MAX_DAYS = 30;
 
 /** Tolérance sur les montants. */
 const EPSILON = 0.005;
@@ -243,6 +252,35 @@ function order_invoices($db, $orderId)
 }
 
 /**
+ * Les factures validées du même client, au même montant, dans les 90 jours de la commande, et
+ * qui ne sont liées à aucune commande : une facture reprise d'ADD que la reprise n'a pas
+ * rattachée. La rattacher vaut mieux qu'en créer une seconde.
+ *
+ * @param  DoliDB $db    Base
+ * @param  object $order Commande (rowid, fk_soc, total_ttc, date_commande)
+ * @return array<int,object> rowid, ref, paye
+ */
+function unlinked_invoice_candidates($db, $order)
+{
+    $out = array();
+    $sql = 'SELECT f.rowid, f.ref, f.paye FROM '.MAIN_DB_PREFIX.'facture AS f'
+        .' WHERE f.fk_soc = '.((int) $order->fk_soc).' AND f.type = '.Facture::TYPE_STANDARD
+        .' AND f.fk_statut IN ('.Facture::STATUS_VALIDATED.', '.Facture::STATUS_CLOSED.')'
+        .' AND ABS(f.total_ttc - '.((float) $order->total_ttc).') < 0.05'
+        ." AND f.datef BETWEEN DATE_SUB('".$db->escape($order->date_commande)."', INTERVAL 2 DAY)"
+        ." AND DATE_ADD('".$db->escape($order->date_commande)."', INTERVAL 90 DAY)"
+        .' AND NOT EXISTS (SELECT 1 FROM '.MAIN_DB_PREFIX.'element_element AS ee'
+        ."   WHERE ee.fk_target = f.rowid AND ee.targettype = 'facture' AND ee.sourcetype = 'commande')"
+        .' ORDER BY f.datef, f.rowid';
+    $resql = $db->query($sql);
+    while ($resql && ($o = $db->fetch_object($resql))) {
+        $out[] = $o;
+    }
+
+    return $out;
+}
+
+/**
  * Les règlements déjà posés sur une facture : montant total et marqueurs d'origine PrestaShop
  * (id de paiement lu dans la note, numéro de transaction).
  *
@@ -279,6 +317,7 @@ $stats = array(
     'commandes'       => count($orders),
     'completes'       => 0,   // rien à faire
     'factures'        => 0,   // factures créées (ou à créer)
+    'rattachees'      => 0,   // factures ADD existantes rattachées à leur commande
     'reglements'      => 0,   // règlements créés (ou à créer)
     'reglements_ttc'  => 0.0,
     'attente_manuel'  => 0,   // règlement à pointer à la main (mapping sans création)
@@ -321,6 +360,18 @@ foreach ($orders as $o) {
         continue;
     }
 
+    // ── Court-circuit : une seule facture liée, validée et soldée → rien à faire, et pas
+    // d'appel à l'API pour le dire (sur un an de commandes, c'est l'essentiel du passage).
+    $quick = order_invoices($db, (int) $o->rowid);
+    if (count($quick) === 1 && (int) $quick[0]->fk_statut !== Facture::STATUS_DRAFT && !empty($quick[0]->paye)) {
+        $row['facture'] = $quick[0]->ref;
+        $row['action_facture'] = 'existante';
+        $row['action_reglement'] = 'soldée';
+        $stats['completes']++;
+        unset($row);
+        continue;
+    }
+
     // ── Côté PrestaShop : la commande (statut, mode de paiement) et ses paiements ──
     $presta = presta_get($o->fk_presta);
     if ($presta === null) {
@@ -348,6 +399,22 @@ foreach ($orders as $o) {
     if (in_array($psState, PS_STATES_NO_INVOICE, true)) {
         $row['action_facture'] = 'ignorée';
         $row['note'] = 'statut PrestaShop bloquant ('.$row['etat_ps'].') : à traiter à la main';
+        $stats['ignorees']++;
+        unset($row);
+        continue;
+    }
+
+    // Une commande que la boutique ne tient pas pour payée (attente de virement, de chèque…) se
+    // facture à chaud — c'est le flux normal — mais pas après des mois : une commande de mai
+    // encore « en attente de virement » a été abandonnée (souvent doublée par une seconde,
+    // payée). Passé UNPAID_MAX_DAYS, on ne crée pas de facture ; une facture existante suit
+    // les règles habituelles.
+    $psStates = $psOrder->getAllPrestaOrderStatus();
+    $psPaidState = isset($psStates[$psState]) ? !empty($psStates[$psState]->paid) : true;
+    $ageDays = (int) floor((dol_now() - $db->jdate($o->date_commande.' 00:00:00')) / 86400);
+    if (!$psPaidState && $ageDays > UNPAID_MAX_DAYS && !order_invoices($db, (int) $o->rowid)) {
+        $row['action_facture'] = 'ignorée';
+        $row['note'] = 'en attente de paiement depuis '.$ageDays.' jours ('.$row['etat_ps'].') : non facturée — abandonnée ?';
         $stats['ignorees']++;
         unset($row);
         continue;
@@ -404,6 +471,32 @@ foreach ($orders as $o) {
                 throw new Exception('facture '.$inv->ref.' illisible');
             }
             $invoice->fetch_thirdparty();
+        } elseif (($cands = unlinked_invoice_candidates($db, $o)) && count($cands) > 1) {
+            $row['facture'] = implode(', ', array_column($cands, 'ref'));
+            $row['action_facture'] = 'ignorée';
+            $row['note'] = 'plusieurs factures non rattachées correspondent (même client, même montant) : à rattacher à la main';
+            $stats['ignorees']++;
+            throw new SkipOrderException('skip');
+        } elseif (count($cands) === 1) {
+            // Une facture d'ADD au montant de la commande, jamais rattachée : on la rattache, pas
+            // question d'en créer une seconde.
+            $row['facture'] = $cands[0]->ref;
+            $row['action_facture'] = $confirm ? 'rattachée' : 'à rattacher';
+            $stats['rattachees']++;
+            $invoice = new Facture($db);
+            if ($invoice->fetch((int) $cands[0]->rowid) <= 0) {
+                throw new Exception('facture '.$cands[0]->ref.' illisible');
+            }
+            $invoice->fetch_thirdparty();
+            if ($confirm) {
+                if ($invoice->add_object_linked('commande', (int) $o->rowid) <= 0) {
+                    throw new Exception('rattachement de '.$cands[0]->ref.' : '.$invoice->error);
+                }
+                $commande = new Commande($db);
+                if ($commande->fetch((int) $o->rowid) > 0 && empty($commande->billed)) {
+                    $commande->classifyBilled($user);
+                }
+            }
         } else {
             // La facture reprend les lignes de la commande Dolibarr : si son total n'est pas ce que
             // le client a payé sur le site (commande reprise d'ADD au prix public, remise du site
@@ -507,7 +600,7 @@ foreach ($orders as $o) {
                         break;
                     }
                     $amount = round((float) $pp->amount * (float) ($pp->conversion_rate ?: 1), 2);
-                    $labels[] = fmt_amount($amount).' '.$pp->payment_method.' du '.dol_print_date($pp->date_add, 'day');
+                    $labels[] = fmt_amount($amount).' '.$pp->payment_method.' du '.dol_print_date($pp->date_add, '%d/%m/%Y');
                     $stats['reglements']++;
                     $stats['reglements_ttc'] += $amount;
                     $orderPayCount++;
@@ -593,7 +686,7 @@ foreach ($orders as $o) {
     if (!$failed && $row['action_facture'] === 'existante' && in_array($row['action_reglement'], array('soldée'), true)) {
         $stats['completes']++;
     }
-    if (!$failed && (in_array($row['action_facture'], array('créée', 'à créer'), true) || in_array($row['action_reglement'], array('créés', 'à créer'), true))) {
+    if (!$failed && (in_array($row['action_facture'], array('créée', 'à créer', 'rattachée', 'à rattacher'), true) || in_array($row['action_reglement'], array('créés', 'à créer'), true))) {
         $done++;
         if ($limit > 0 && $done >= $limit) {
             echo "Limite atteinte (".$limit.").\n";
@@ -624,6 +717,7 @@ echo str_repeat('-', 60)."\n";
 printf("Commandes du site examinées   : %d\n", $stats['commandes']);
 printf("Déjà complètes (facturées, soldées) : %d\n", $stats['completes']);
 printf("Factures %s : %d\n", $confirm ? 'créées        ' : 'à créer       ', $stats['factures']);
+printf("Factures ADD %s : %d\n", $confirm ? 'rattachées ' : 'à rattacher', $stats['rattachees']);
 printf("Règlements %s : %d (%s)\n", $confirm ? 'créés       ' : 'à créer     ', $stats['reglements'], fmt_amount($stats['reglements_ttc']));
 printf("Règlements à pointer à la main : %d\n", $stats['attente_manuel']);
 printf("Commandes ignorées (listées)   : %d\n", $stats['ignorees']);
