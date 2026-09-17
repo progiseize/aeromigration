@@ -32,8 +32,9 @@
  *    Dolibarr par paiement PrestaShop (`order_payments`) pas encore importé — repéré par la
  *    note « ID : <id PrestaShop> » que Prestasync écrit sur ses règlements, ou par le numéro de
  *    transaction —, à la date PrestaShop, mode et compte du mapping, écriture en banque,
- *    facture classée payée si soldée. Un paiement plus grand que le reste à payer est plafonné
- *    et signalé.
+ *    facture classée payée si soldée. Un paiement plus grand que le reste à payer n'est PAS
+ *    posé : la facture est fausse (port oublié sur les factures faites à la main le 07/09),
+ *    la commande est listée pour avoir et refacturation.
  *
  * ## Ce qu'il ne fait pas, et dit
  *
@@ -282,7 +283,7 @@ $stats = array(
     'reglements_ttc'  => 0.0,
     'attente_manuel'  => 0,   // règlement à pointer à la main (mapping sans création)
     'ignorees'        => 0,   // brouillon/annulée Dolibarr, statut PS bloquant, facture brouillon, ambiguïté
-    'ecarts'          => 0,   // paiement plafonné, montants différents
+    'ecarts'          => 0,   // payé > facture, paiements déjà en base sans solde, reste après paiements
     'erreurs'         => 0,
 );
 $rows   = array();   // détail par commande, pour l'écran et le CSV
@@ -484,17 +485,28 @@ foreach ($orders as $o) {
                 $row['note'] = trim($row['note'].' ; paiements PrestaShop déjà en base mais facture non soldée (reste '.fmt_amount($remain).')', ' ;');
                 $stats['ecarts']++;
             } else {
+                // Le client a payé PLUS que ce que la facture réclame : la facture est fausse
+                // (12 factures faites à la main le 07/09 sans la ligne de port). Poser un règlement
+                // plafonné masquerait l'écart avec l'encaissement réel : rien n'est posé, la commande
+                // est listée — avoir et refacturation à la main.
+                $sumToCreate = 0.0;
+                foreach ($toCreate as $pp) {
+                    $sumToCreate += round((float) $pp->amount * (float) ($pp->conversion_rate ?: 1), 2);
+                }
+                if ($sumToCreate > $remain + 0.02) {
+                    $row['action_reglement'] = 'ignoré';
+                    $row['note'] = trim($row['note'].' ; payé sur le site '.fmt_amount($sumToCreate).' > reste à payer '.fmt_amount($remain)
+                        .' : facture incomplète (port ?), avoir + refacturation à la main', ' ;');
+                    $stats['ecarts']++;
+                    throw new SkipOrderException('skip');
+                }
+
                 $labels = array();
                 foreach ($toCreate as $pp) {
                     if ($remain <= EPSILON) {
                         break;
                     }
                     $amount = round((float) $pp->amount * (float) ($pp->conversion_rate ?: 1), 2);
-                    if ($amount > $remain + EPSILON) {
-                        $row['note'] = trim($row['note'].' ; paiement PrestaShop '.fmt_amount($amount).' plafonné au reste à payer '.fmt_amount($remain), ' ;');
-                        $stats['ecarts']++;
-                        $amount = $remain;
-                    }
                     $labels[] = fmt_amount($amount).' '.$pp->payment_method.' du '.dol_print_date($pp->date_add, 'day');
                     $stats['reglements']++;
                     $stats['reglements_ttc'] += $amount;
