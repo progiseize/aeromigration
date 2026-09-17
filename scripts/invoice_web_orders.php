@@ -294,8 +294,17 @@ echo "Depuis      : ".$from.($onlyOrder !== '' ? ' — commande '.$onlyOrder : '
 echo "Mode        : ".($confirm ? "ÉCRITURE" : "SIMULATION (aucune écriture)")."\n";
 echo str_repeat('-', 60)."\n";
 
-$done = 0;
+$done  = 0;
+$seen  = 0;
+$total = count($orders);
 foreach ($orders as $o) {
+    // Avancement réécrit sur place : deux appels à l'API par commande, le passage dure des
+    // minutes, et sans cette ligne il semble bloqué.
+    $seen++;
+    printf("\r  %3d/%-3d  %-16s  factures %-3d règlements %-3d  ignorées %-3d erreurs %-3d",
+        $seen, $total, $o->ref, $stats['factures'], $stats['reglements'], $stats['ignorees'], $stats['erreurs']);
+    flush();
+
     $row = array(
         'commande' => $o->ref, 'ps' => '', 'etat_ps' => '', 'facture' => '', 'action_facture' => '',
         'reglements' => '', 'action_reglement' => '', 'note' => '',
@@ -588,6 +597,7 @@ foreach ($orders as $o) {
  * Rapport
  */
 
+echo "\n".str_repeat('-', 60)."\n";
 printf("%-16s %-22s %-24s %-16s %-10s %-14s %s\n", 'Commande', 'PrestaShop', 'État PS', 'Facture', 'Action', 'Règlement', 'Détail / note');
 foreach ($rows as $r) {
     if ($r['action_facture'] === 'existante' && $r['action_reglement'] === 'soldée') {

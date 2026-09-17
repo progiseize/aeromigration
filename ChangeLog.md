@@ -6,6 +6,21 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.39.0] — 2026-09-17
+
+### Ajouté — `scripts/set_default_supplier.php` : le fournisseur principal ADD devient l'étoile aerotoolbox
+
+aerotoolbox 1.45.0 marque un tarif fournisseur par article comme tarif par défaut (extrafield
+`aerotb_default`, étoile de la Vue 360° et de l'onglet Prix d'achat, « meilleur » tarif du
+réappro). Le script le pose depuis `f_artfourniss.AF_Principal` : article par `ref_ext`
+`SAGE:AR_Ref`, tiers par `SAGE:CT_Num`, tarif de ce produit chez ce tiers (le plus petit
+palier), écriture par `aerotb_price_default_set()` — jamais de SQL sur l'extrafield. Seconde
+passe : les déclinaisons héritent du principal de leur parent (tarif chez ce tiers, posé le
+14/09), `--no-variants` pour s'en passer. Une étoile déjà posée à la main est conservée
+(`--force` réaligne tout sur ADD) ; rejouable. Rapprochement en mémoire (ref_ext n'est pas
+indexé) : 20 s pour tout le catalogue. Sur la copie locale : 15 394 articles + 1 021
+déclinaisons, 5 principaux sans article repris, 6 sans tarif chez ce fournisseur.
+
 ## [0.38.0] — 2026-09-17
 
 ### Ajouté — `scripts/invoice_web_orders.php` : les commandes du site sont facturées et réglées comme Prestasync l'aurait fait
