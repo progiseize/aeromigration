@@ -6,6 +6,62 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.38.0] — 2026-09-17
+
+### Ajouté — `scripts/invoice_web_orders.php` : les commandes du site sont facturées et réglées comme Prestasync l'aurait fait
+
+Autour de la bascule, la facturation automatique de Prestasync n'a pas couvert toutes les
+commandes : celles reprises d'ADD (1er → 5 septembre, rattachées au site après coup) n'ont
+jamais été facturées ici, et des premières commandes synchronisées ont leur facture sans son
+règlement. Le script parcourt les commandes rattachées au site depuis le 1er septembre
+(`--from=`) et rejoue la chaîne avec les classes de Prestasync (API PrestaShop, mapping des
+modes de paiement) : facture par `createFromOrder` si la commande n'en a pas (compte bancaire,
+validation, commande classée facturée, PDF, pas d'e-mail), puis un règlement Dolibarr par
+paiement PrestaShop pas encore importé (repéré par la note « ID : n » de Prestasync ou le
+numéro de transaction), à la date PrestaShop, avec écriture en banque et facture soldée.
+
+Gardes : commande brouillon/annulée, statut PrestaShop annulé/remboursé/erreur, facture en
+brouillon ou plusieurs factures sur la commande, total Dolibarr ≠ total payé sur le site
+(commande d'ADD au prix public, `CO2526-007762`) → rien, listé ; mode de paiement dont le
+mapping ne crée pas de règlement (virement) → facture faite, règlement à pointer à la main ;
+paiement supérieur au reste à payer → plafonné et signalé. Une transaction par commande,
+rejouable. Testé en local sur la copie de la boutique (création + règlement, facture existante
++ règlement, rejeu à vide).
+
+## [0.37.0] — 2026-09-14
+
+### Corrigé — les dérogations en sommeil ne nourrissent plus les niveaux de prix
+
+Le client l'a relevé sur `#10171` : 935,75 € en Aéro-Clubs et Revendeur, alors que ces lignes
+de `z_tarifparticulier` (2019) avaient été mises en sommeil (`statut = 'S'`) en 2024. La
+reprise (`customerprice`) ne regardait que les dates de validité — la colonne `statut` avait
+été jugée inexploitable sur le Comptoir, où 71 % des lignes n'en ont pas — et une ligne
+endormie garde des dates ouvertes. Le moteur exclut désormais `S` (lignes article et règles de
+famille ; `O` ou vide restent actifs), et le rapport compte les lignes écartées à ce titre.
+Ampleur mesurée : 75 dérogations sur 57 articles, après fusion des niveaux (site → 1,
+Aéro-Clubs → 2 … FFA → 7) ; 33 autres lignes `S` étaient déjà neutralisées par une ligne
+active plus récente.
+
+### Ajouté — `scripts/fix_sleeping_tariffs.php` : rattrapage de la base déjà tarifée
+
+Réutilise le moteur borné aux 57 articles : cible recalculée comme au jour J (prix de base ou
+règle de famille), pilotage par le niveau 1 reposé. Garde contre les retouches manuelles
+faites depuis le 07/09 : un article n'est corrigé que si tout ce qui y change est imputable au
+sommeil (niveau encore au prix endormi, aucun autre niveau divergent), sinon il est conservé
+et listé. `--csv=` écrit la liste (une ligne par article et niveau : prix en sommeil, actuel,
+corrigé, action) — le fichier remis au client, `tarifs_sommeil_20260914.csv`, a été produit
+sur la copie prod du 09/09, l'écart venant de la reprise. Simulation par défaut, `--confirm`. Sur la copie du 09/09 : 54 articles / 70 niveaux à
+corriger, 2 déjà justes, 1 retouché à la main (`#00035`).
+
+### Corrigé — `MigrationCustomerPrice` : les règles « seules » se posent avant les prix
+
+Un niveau au bon prix mais au mauvais écart recevait sa règle APRÈS l'écriture du niveau 1 ;
+or c'est cette écriture qui propage aux niveaux pilotés, avec l'écart qu'ils portent à cet
+instant. Vécu sur `#01024` (sommeil en catégorie site, donc niveau 1) : niveaux 3-7 re-dérivés
+à −5,26 % du niveau corrigé, puis règle écrite sur des lignes déjà remplacées. Les règles
+seules sont maintenant posées avant toute écriture de prix — la propagation retombe sur la
+cible. Sans effet sur une première reprise (aucune règle préexistante).
+
 ## [0.36.0] — 2026-09-14
 
 ### Ajouté — `scripts/copy_supplier_prices_to_variants.php` : les déclinaisons héritent des tarifs fournisseurs du parent

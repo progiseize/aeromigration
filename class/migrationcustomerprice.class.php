@@ -41,10 +41,15 @@
  *   ne le reconstitue : c'est un indicateur de marge. Sur toutes les lignes concernées,
  *   `AR_PrixVen` est de toute façon renseigné et fait foi.
  *
- * - **`statut` est inexploitable.** Ses trois valeurs — `O`, `S`, vide — ne corrèlent ni avec
- *   la péremption ni avec le prix. En catégorie Comptoir, **3 717 lignes sur 5 217 ont un
- *   statut vide** : filtrer sur `statut = 'O'` perdrait 71 % du tarif. Seules les dates de
- *   validité départagent, et elles sont nettes.
+ * - **`statut` : `S` = sommeil, écarté ; `O` ou vide = actif** (correction du 14/09/2026).
+ *   La première lecture l'avait jugé inexploitable — en catégorie Comptoir, 3 717 lignes
+ *   sur 5 217 ont un statut vide, filtrer sur `O` aurait perdu 71 % du tarif — et ne
+ *   retenait que les dates de validité. Or une ligne mise en sommeil garde des dates
+ *   ouvertes (jusqu'en 2099) : 75 dérogations en sommeil sur 57 articles sont ainsi passées
+ *   dans les niveaux (le client l'a relevé sur `#10171`, 935,75 € en Aéro-Clubs et
+ *   Revendeur). Le Comptoir n'alimentant plus rien depuis la fusion, la règle simple tient :
+ *   seul `S` est écarté, une ligne sans statut reste active. Le rattrapage d'une base déjà
+ *   tarifée est porté par `scripts/fix_sleeping_tariffs.php`.
  *
  * - **Les 61 règles par famille de la catégorie FFA sont neutres** : toutes portent
  *   `remise = 0` et `coeff = 1`. Sept règles seulement sont agissantes, en catégories
@@ -439,6 +444,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
         $sql .= '   AND AG_No1 = 0';
         $sql .= "   AND COALESCE(TRIM(CT_Num), '') = ''";
         $sql .= '   AND AR_aPartirDe <= 1';
+        $sql .= "   AND COALESCE(statut, '') <> 'S'";   // sommeil : la ligne ne vaut plus, quelles que soient ses dates
         $sql .= "   AND AR_DateDebut <= '".$now."' AND AR_DateFin >= '".$now."'";
         $sql .= ' ORDER BY AR_Ref ASC, N_CatTarif ASC, (DE_No = 1) DESC, AR_DateDebut DESC, cbMarq DESC';
 
@@ -489,6 +495,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
             'paliers de quantité'                  => 'AR_aPartirDe > 1',
             'lignes hors période de validité'      => "AR_DateDebut > '".$now."' OR AR_DateFin < '".$now."'",
             'lignes de la catégorie 0, historique' => 'N_CatTarif = 0',
+            'lignes en sommeil (statut S)'         => "statut = 'S'",
         );
 
         foreach ($motifs as $libelle => $condition) {
@@ -529,6 +536,7 @@ class MigrationCustomerPrice extends AeroMigrationRunner
         $sql .= ' WHERE N_CatTarif IN ('.implode(', ', $this->sourceCategories()).')';
         $sql .= "   AND COALESCE(TRIM(AR_Ref), '') = ''";
         $sql .= '   AND CL_No > 0 AND AG_No1 = 0';
+        $sql .= "   AND COALESCE(statut, '') <> 'S'";
         $sql .= "   AND AR_DateDebut <= '".$now."' AND AR_DateFin >= '".$now."'";
 
         $resql = $this->db->query($sql);
@@ -969,6 +977,28 @@ class MigrationCustomerPrice extends AeroMigrationRunner
             throw new Exception('Article introuvable en cible (rowid '.$productId.') : '.$this->objectErrors($object));
         }
 
+        // Les niveaux dont le prix était déjà juste : seule la règle leur manquait. Passer par
+        // `updatePrice()` n'y créerait aucune ligne — le coeur n'en insère que si le prix a
+        // changé (product.class.php:2916) — et le trigger n'aurait donc rien à annoter.
+        //
+        // AVANT toute écriture de prix, et surtout avant celle du niveau 1 : c'est elle qui
+        // propage vers les niveaux pilotés, avec l'écart qu'ils portent À CE MOMENT-LÀ. Poser
+        // l'écart juste d'abord, c'est garantir que la propagation retombe sur la cible ; le
+        // poser après, c'est corriger une ligne déjà remplacée (vécu le 14/09/2026 sur #01024 :
+        // niveaux 3-7 re-dérivés à −5,26 % d'un niveau 1 corrigé, puis règle écrite dans le vide).
+        foreach ($ruleOnly as $level => $rule) {
+            $rowid = (int) $this->existingPrices[$productId][$level]['rowid'];
+
+            if (aerotbPriceRuleWrite($this->db, $rowid, $rule['pct'], $rule['follow']) < 0) {
+                throw new Exception('Échec du pilotage du niveau '.$level.' (ligne '.$rowid.')');
+            }
+
+            $this->existingPrices[$productId][$level]['pct']    = $rule['pct'];
+            $this->existingPrices[$productId][$level]['follow'] = $rule['follow'];
+
+            $this->rulesAlone++;
+        }
+
         // L'ordre compte : `updatePrice()` recopie le prix dans `llx_product` sans jamais
         // regarder le niveau qu'elle écrit (product.class.php:2868). Terminer par le
         // niveau 1 laisse donc le prix de base juste, y compris si le trigger de réalignement
@@ -1036,22 +1066,6 @@ class MigrationCustomerPrice extends AeroMigrationRunner
         // Le contexte ne doit pas survivre à la boucle : il vaudrait pour toute écriture de
         // prix ultérieure sur cet objet.
         unset($object->context['aerotb_price_rule']);
-
-        // Les niveaux dont le prix était déjà juste : seule la règle leur manquait. Passer par
-        // `updatePrice()` n'y créerait aucune ligne — le coeur n'en insère que si le prix a
-        // changé (product.class.php:2916) — et le trigger n'aurait donc rien à annoter.
-        foreach ($ruleOnly as $level => $rule) {
-            $rowid = (int) $this->existingPrices[$productId][$level]['rowid'];
-
-            if (aerotbPriceRuleWrite($this->db, $rowid, $rule['pct'], $rule['follow']) < 0) {
-                throw new Exception('Échec du pilotage du niveau '.$level.' (ligne '.$rowid.')');
-            }
-
-            $this->existingPrices[$productId][$level]['pct']    = $rule['pct'];
-            $this->existingPrices[$productId][$level]['follow'] = $rule['follow'];
-
-            $this->rulesAlone++;
-        }
 
         return array('action' => $isNew ? 'created' : 'updated', 'id' => $productId);
     }
