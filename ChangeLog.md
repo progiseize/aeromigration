@@ -8,6 +8,15 @@ et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [0.39.2] — 2026-09-18
 
+### Ajouté — `fix_levels_above_base.php` : un niveau au-dessus du prix de base est une anomalie
+
+Règle posée par le client le 18/09 : une catégorie tarifaire est une remise sur le prix
+public, jamais une majoration. Le script ramène au prix HT du niveau 1 tout niveau 2 à 7 qui
+lui est supérieur (au demi-centime près), indexé sur lui à 0 %, sans toucher au niveau 1 ni à
+`llx_product.price`. Sur la copie du 17/09 : 18 articles, 20 niveaux (de +0,05 % à +1 488 %,
+tous datés de la reprise du 06/09), plus le `#01024` traité par `--force` ci-dessous. Simulation
+par défaut, `--confirm`, `--ref=`, `--csv=`.
+
 ### Ajouté — `fix_sleeping_tariffs.php --force [--ref=REF]`
 
 Le passage du 14/09 avait laissé de côté deux articles retouchés à la main avant lui
