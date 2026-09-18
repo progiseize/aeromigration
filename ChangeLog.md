@@ -12,8 +12,9 @@ et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 Règle posée par le client le 18/09 : une catégorie tarifaire est une remise sur le prix
 public, jamais une majoration. Le script ramène au prix HT du niveau 1 tout niveau 2 à 7 qui
-lui est supérieur (au demi-centime près), indexé sur lui à 0 %, sans toucher au niveau 1 ni à
-`llx_product.price`. Sur la copie du 17/09 : 18 articles, 20 niveaux (de +0,05 % à +1 488 %,
+lui est supérieur (au demi-centime près), indexé sur lui à 0 % — ou à la règle de famille ADD
+de la catégorie quand l'article en a une, que le prix fixe obsolète masquait (`#11390`,
+Aéro-Clubs −5 %) — sans toucher au niveau 1 ni à `llx_product.price`. Sur la copie du 17/09 : 18 articles, 20 niveaux (de +0,05 % à +1 488 %,
 tous datés de la reprise du 06/09), plus le `#01024` traité par `--force` ci-dessous. Simulation
 par défaut, `--confirm`, `--ref=`, `--csv=`.
 
