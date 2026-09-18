@@ -702,15 +702,57 @@ foreach ($orders as $o) {
  * Rapport
  */
 
-echo "\n".str_repeat('-', 60)."\n";
-printf("%-16s %-22s %-24s %-16s %-10s %-14s %s\n", 'Commande', 'PrestaShop', 'État PS', 'Facture', 'Action', 'Règlement', 'Détail / note');
+/**
+ * La catégorie d'une ligne, pour grouper le rapport : ce qui s'écrit d'abord, puis ce qui attend
+ * une main, puis ce qui est laissé de côté.
+ *
+ * @param  array $r Ligne
+ * @return string
+ */
+function report_group(array $r)
+{
+    if (in_array($r['action_facture'], array('créée', 'à créer', 'rattachée', 'à rattacher', 'ÉCHEC'), true)
+        || in_array($r['action_reglement'], array('créés', 'à créer', 'ÉCHEC'), true)) {
+        return '1. FACTURES ET RÈGLEMENTS'.(in_array('ÉCHEC', array($r['action_facture'], $r['action_reglement']), true) ? ' — ÉCHECS' : '');
+    }
+    if (in_array($r['action_reglement'], array('à pointer à la main', 'aucun paiement PrestaShop'), true)) {
+        return '2. RÈGLEMENTS À POINTER À LA MAIN (virement, chèque)';
+    }
+    if (strpos($r['note'], 'facture incomplète') !== false) {
+        return '3. FACTURE INCOMPLÈTE : AVOIR + REFACTURATION';
+    }
+    if (strpos($r['note'], 'plusieurs factures') !== false) {
+        return '4. PLUSIEURS FACTURES SUR LA COMMANDE : À VÉRIFIER';
+    }
+    if (strpos($r['note'], 'abandonnée') !== false) {
+        return '5. EN ATTENTE DE PAIEMENT DEPUIS PLUS DE '.UNPAID_MAX_DAYS.' JOURS';
+    }
+    if (strpos($r['note'], 'commande annulée') !== false || strpos($r['note'], 'brouillon') !== false) {
+        return '7. ANNULÉES / BROUILLONS';
+    }
+
+    return '6. AUTRES CAS À CORRIGER';
+}
+
+$grouped = array();
 foreach ($rows as $r) {
     if ($r['action_facture'] === 'existante' && $r['action_reglement'] === 'soldée') {
         continue;   // complète : rien à dire
     }
-    printf("%-16s %-22s %-24s %-16s %-10s %-14s %s\n", $r['commande'], $r['ps'], dol_trunc($r['etat_ps'], 22),
-        $r['facture'], $r['action_facture'], $r['action_reglement'],
-        trim($r['reglements'].($r['note'] !== '' ? ' — '.$r['note'] : '')));
+    $grouped[report_group($r)][] = $r;
+}
+ksort($grouped);
+
+echo "\n";
+foreach ($grouped as $title => $list) {
+    echo str_repeat('=', 60)."\n".$title.' ('.count($list).")\n".str_repeat('=', 60)."\n";
+    printf("%-16s %-22s %-24s %-16s %-10s %-14s %s\n", 'Commande', 'PrestaShop', 'État PS', 'Facture', 'Action', 'Règlement', 'Détail / note');
+    foreach ($list as $r) {
+        printf("%-16s %-22s %-24s %-16s %-10s %-14s %s\n", $r['commande'], $r['ps'], dol_trunc($r['etat_ps'], 22),
+            $r['facture'], $r['action_facture'], $r['action_reglement'],
+            trim($r['reglements'].($r['note'] !== '' ? ' — '.$r['note'] : '')));
+    }
+    echo "\n";
 }
 
 echo str_repeat('-', 60)."\n";

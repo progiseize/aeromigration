@@ -36,6 +36,15 @@
  * niveau modifié depuis le 07/09 laissent l'article intact, listé à part au rapport et dans
  * le fichier — à arbitrer avec le client.
  *
+ * ## `--force` : les retouchés à la main, après arbitrage
+ *
+ * Deux articles avaient été retouchés à la main avant le passage du 14/09 (`#01024`, `#00035`) :
+ * le client avait corrigé le niveau 1 dans la grille, et l'indexation des autres niveaux sur le
+ * niveau 1 (aerotb_price_pct, mémorisée au moment de la reprise sur un niveau 1 faux) les avait
+ * déplacés — jusqu'à +5,26 % au-dessus du prix public. Vérifié dans ADD : aucun tarif de
+ * catégorie actif. `--force` lève la garde : tous les niveaux de ces articles reviennent à la
+ * cible du moteur (prix de base ou règle de famille), indexation reposée.
+ *
  * ## Le fichier
  *
  * Avec `--csv=`, le passage écrit la liste — une ligne par (article, niveau) : réf, libellé,
@@ -46,6 +55,9 @@
  * Usage :
  *   php fix_sleeping_tariffs.php                 simulation, rien d'écrit
  *   php fix_sleeping_tariffs.php --confirm       applique
+ *   php fix_sleeping_tariffs.php --force [--ref=#01024]   corrige AUSSI les articles retouchés à la
+ *                                                main (tous leurs niveaux reviennent à la cible du
+ *                                                moteur) ; --ref borne à un article
  *   php fix_sleeping_tariffs.php --csv=/chemin/liste.csv   écrit aussi la liste (article, niveau)
  *   php fix_sleeping_tariffs.php --source-db=aeroprod   base où sont les tables de l'ancien ERP
  *   php fix_sleeping_tariffs.php --user=LOGIN
@@ -82,6 +94,8 @@ $confirm   = false;
 $userLogin = '';
 $csvPath   = '';
 $sourceDb  = null;
+$force     = false;
+$onlyRef   = '';
 
 for ($i = 1; $i < $argc; $i++) {
     $arg = $argv[$i];
@@ -93,9 +107,13 @@ for ($i = 1; $i < $argc; $i++) {
         $csvPath = $m[1];
     } elseif (preg_match('/^--source-db=(.*)$/', $arg, $m)) {
         $sourceDb = trim($m[1]);
+    } elseif ($arg === '--force') {
+        $force = true;
+    } elseif (preg_match('/^--ref=(.+)$/', $arg, $m)) {
+        $onlyRef = ltrim(ltrim(trim($m[1]), '#'), '0');
     } else {
         echo "Argument non reconnu : ".$arg."\n";
-        echo "Usage: php ".$script_file." [--confirm] [--csv=FICHIER] [--source-db=BASE] [--user=LOGIN]\n";
+        echo "Usage: php ".$script_file." [--confirm] [--force] [--ref=REF] [--csv=FICHIER] [--source-db=BASE] [--user=LOGIN]\n";
         exit(1);
     }
 }
@@ -147,6 +165,15 @@ class FixSleepingTariffs extends MigrationCustomerPrice
 
     /** @var int Articles laissés intacts : retouchés à la main depuis la reprise */
     public $keptManual = 0;
+
+    /** @var bool Corriger aussi les articles retouchés à la main (--force) */
+    public $force = false;
+
+    /** @var string Borner à une référence source (--ref, sans # ni zéros de tête), vide = tous */
+    public $onlyRef = '';
+
+    /** @var int Articles retouchés à la main et corrigés quand même (--force) */
+    public $forcedArticles = 0;
 
     /** @var int Articles dont les niveaux sont déjà justes */
     public $alreadyRight = 0;
@@ -285,6 +312,26 @@ class FixSleepingTariffs extends MigrationCustomerPrice
             $rows[] = array($level, $cat, $sleepAmt, $curAmt, $tgtAmt, $target['base'], $this->dryrun ? 'à corriger' : 'corrigé');
         }
 
+        if ($this->onlyRef !== '' && ltrim($ref, '0') !== $this->onlyRef) {
+            return false;
+        }
+
+        // --force : la garde est levée, tout niveau hors cible est corrigé, sommeil ou retouche.
+        if ($manual && $this->force) {
+            $manual  = false;
+            $pending = 0;
+            foreach ($rows as &$r) {
+                if ($r[3] === null || abs((float) $r[3] - (float) $r[4]) > self::ROUNDING) {
+                    $pending++;
+                    $r[6] = $this->dryrun ? 'à corriger (forcé)' : 'corrigé (forcé)';
+                } else {
+                    $r[6] = 'déjà juste';
+                }
+            }
+            unset($r);
+            $this->forcedArticles++;
+        }
+
         foreach ($rows as $r) {
             list($level, $cat, $sleepAmt, $curAmt, $tgtAmt, $b, $action) = $r;
             if ($manual && $action !== 'retouché à la main, conservé') {
@@ -365,6 +412,8 @@ class FixSleepingTariffs extends MigrationCustomerPrice
 
 $runner = new FixSleepingTariffs($db, $user);
 $runner->dryrun = !$confirm;
+$runner->force   = $force;
+$runner->onlyRef = $onlyRef;
 if ($sourceDb !== null) {
     $runner->sourceDb = ($sourceDb === $db->database_name) ? '' : $sourceDb;
 }
@@ -422,6 +471,9 @@ printf("Articles %s : %d\n", $confirm ? 'corrigés          ' : 'à corriger    
 printf("  niveaux %s : %d\n", $confirm ? 'corrigés ' : 'à corriger', $runner->fixedLevels);
 printf("Articles déjà justes         : %d\n", $runner->alreadyRight);
 printf("Articles retouchés à la main : %d (conservés, à arbitrer — voir le fichier)\n", $runner->keptManual);
+if ($force) {
+    printf("Articles forcés (--force)    : %d\n", $runner->forcedArticles);
+}
 printf("Erreurs                      : %d\n", $runner->stats['error']);
 foreach ($runner->errors as $e) {
     echo "  - ".$e['message']."\n";

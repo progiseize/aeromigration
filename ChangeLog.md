@@ -6,6 +6,19 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.39.2] — 2026-09-18
+
+### Ajouté — `fix_sleeping_tariffs.php --force [--ref=REF]`
+
+Le passage du 14/09 avait laissé de côté deux articles retouchés à la main avant lui
+(`#01024`, `#00035`). Sur `#01024`, la retouche du niveau 1 dans la grille avait fait suivre
+les niveaux indexés avec un pourcentage mémorisé à la reprise sur un niveau 1 faux : les
+niveaux 3 à 7 étaient montés à +5,26 % au-dessus du prix public — et l'alignement des tarifs
+sur la boutique (aeropresta 0.28.0) les aurait publiés. Vérifié dans ADD : aucun tarif de
+catégorie actif. `--force` lève la garde et ramène tous les niveaux de l'article à la cible du
+moteur ; `--ref` borne à un article. `#00035` (Revendeur à −20 % posé à la main) reste à
+arbitrer avec le client avant d'y toucher.
+
 ## [0.39.1] — 2026-09-17
 
 ### Modifié — `invoice_web_orders.php` : validé sur les dumps prod du 17/09, trois règles de plus
