@@ -12,6 +12,11 @@ et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
   de la boutique par le webservice (toutes lignes, tous champs), pour qui n'a pas la main sur la
   base Infomaniak ; photo « avant / après » d'un alignement ou d'une purge. Lit la connexion
   aeropresta (`aeropresta_ps_shop`).
+- `scripts/purge_cart_prices.php [--confirm --csv=FICHIER]` : supprime par le webservice les prix
+  spécifiques orphelins « client + panier » (`id_customer > 0` et `id_cart > 0`, 853 lignes de
+  2019-2021 dont les paniers ont disparu — sans effet sur les prix, PrestaShop ne les applique
+  qu'au panier d'origine). Simulation par défaut, trace CSV, arrêt après 20 échecs, rejouable.
+  Testé en local : 853 supprimées, 0 échec.
 
 ## [0.39.2] — 2026-09-18
 
