@@ -6,6 +6,13 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.39.3] — 2026-09-20
+
+- `scripts/export_specific_prices.php --csv=FICHIER` : sauvegarde complète de `ps_specific_price`
+  de la boutique par le webservice (toutes lignes, tous champs), pour qui n'a pas la main sur la
+  base Infomaniak ; photo « avant / après » d'un alignement ou d'une purge. Lit la connexion
+  aeropresta (`aeropresta_ps_shop`).
+
 ## [0.39.2] — 2026-09-18
 
 ### Ajouté — `fix_levels_above_base.php` : un niveau au-dessus du prix de base est une anomalie
