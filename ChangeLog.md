@@ -6,6 +6,18 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.39.4] — 2026-09-23
+
+- `scripts/normalize_stock_alert.php` : remet du sens dans `llx_product.seuil_stock_alerte`, que la
+  reprise et le formulaire natif avaient laissé à **zéro partout** (13 075 articles, aucun NULL) —
+  ADD faisait pareil, `f_artstock.AS_QteMini` valant 0 sur 26 998 de ses 27 924 lignes, et ses
+  ~1 000 vraies règles sont bien arrivées (921 des 924 minis > 0). Le zéro devenant une consigne
+  (« à commander dès que le stock est vide »), il est désormais posé **sur le seul catalogue actif**
+  — un bien, en vente ET en achat, hors états d'arrêt — et **vidé partout ailleurs**. Un seuil saisi
+  (> 0) n'est jamais touché. Simulation par défaut, `--confirm` pour appliquer, `--list=N` pour voir
+  des exemples ; rejouable. Sur la base du 21/09 : 9 777 zéros vidés (9 414 hors vente, 277 hors
+  achat, 85 services, 1 arrêté), 3 298 conservés, 3 659 seuils intacts.
+
 ## [0.39.3] — 2026-09-20
 
 - `scripts/export_specific_prices.php --csv=FICHIER` : sauvegarde complète de `ps_specific_price`
