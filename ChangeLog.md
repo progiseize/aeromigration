@@ -6,6 +6,19 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.39.5] — 2026-09-25
+
+- `scripts/realign_kit_status.php` : remet chaque produit composé d'accord avec ses composants —
+  suivi imposé (le plus contraignant l'emporte), disponibilité durcie dès qu'un composant est
+  arrêté, suspendu ou indisponible. La règle existe depuis aerotoolbox 1.13.0 mais ne se déclenche
+  que sur événement : les lots que rien n'avait touché depuis étaient restés en l'état. Au relevé
+  du 25/09 sur la copie de production, **7 lots sur 181 étaient désalignés, dont 5 en vente** —
+  #14580 « Pochette VFR 2025 » en tête, affiché *Disponible* avec un composant en commercialisation
+  arrêtée, et vendu 54 fois sur l'année.
+  Simulation par défaut (transaction annulée : ce qui est annoncé est exactement ce qui sera écrit),
+  `--confirm` pour appliquer, `--push` pour propager vers la boutique, `--id=` pour un seul lot.
+  Rejouable. **La règle ne fait que durcir** : un lot volontairement arrêté n'est jamais radouci.
+
 ## [0.39.4] — 2026-09-23
 
 - `scripts/normalize_stock_alert.php` : remet du sens dans `llx_product.seuil_stock_alerte`, que la
