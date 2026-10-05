@@ -6,6 +6,54 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.40.0] — 2026-10-05
+
+### Ajouté — Le PMP des articles jamais achetés dans Dolibarr
+
+Message du client du 03/09/2026 : « *Je propose de mettre la même donnée (prix de revient 2026) pour
+le prix de revient Dolibarr et pour le PMP. Le PMP évoluera au fil du temps avec cette référence pour
+donnée de référence.* » La première moitié a été faite — `import_prix_revient.php` pose `cost_price`
+depuis le fichier client. **La seconde ne l'a jamais été** : aucun script n'a initialisé le PMP.
+
+D'où **8 891 articles** qui portent un prix de revient juste et un prix moyen à zéro, et une marge
+incalculable sur une part du chiffre d'affaires. Ce n'est pas un effet de bord : les entrées en stock
+reprises de l'ancien ERP ne portent aucun prix, et le cœur ne construit le PMP que sur une entrée
+valorisée (`MouvementStock::_create`, `if ($price > 0 …)`).
+
+- **`scripts/init_pmp.php`** recopie `cost_price` dans `pmp` pour les seuls articles qui réunissent
+  trois conditions : PMP nul, prix de revient positif, et **aucune entrée valorisée dans tout
+  l'historique**. Un PMP construit par de vrais achats vaut mieux que n'importe quelle valeur de
+  référence — il n'est jamais touché.
+- **Un PMP posé à la main n'est jamais réécrit.** La Vue 360° du module laisse éditer ce champ et
+  trace chaque changement en agenda (`AeroTbFptActPmp`) : le client s'en sert pour déprécier, on
+  relève **onze mises à zéro délibérées** du type « 67,42 € → 0,00 € ». Un article dont quelqu'un a
+  fixé le PMP porte une décision, pas une lacune — le script s'en écarte quel que soit son prix de
+  revient. Les deux libellés, français et anglais, sont cherchés : l'événement porte celui de la
+  langue en vigueur au moment du changement.
+- **Écartés sans que ce soit un écart**, et comptés au rapport : les 2 481 articles dont les deux
+  valeurs sont à zéro (les zéros assumés du fichier client, arbitrage du 06/09), les 153 produits
+  composés dont le coût découle des composants, les services, et les onze ci-dessus.
+- **Réversible** : les articles touchés reçoivent l'horodatage de la passe dans `import_key`, colonne
+  libre sur `llx_product`. Le script affiche en fin de course l'`UPDATE` qui défait tout.
+- **Rejouable** : un article amorcé a un PMP non nul, il sort du périmètre de lui-même. La clause
+  `AND COALESCE(pmp, 0) = 0` de l'`UPDATE` vaut garde-fou si une réception survient entre la lecture
+  et l'écriture.
+- Écriture SQL groupée par paquets de 500, ni `Product::update()` — qui déclencherait
+  `PRODUCT_MODIFY` donc la synchronisation boutique pour une colonne que la boutique ignore — ni
+  `setValueFrom()`, qui rechargerait l'objet à chaque ligne.
+- `--dry-run` par défaut, `--confirm` pour écrire, `--limit=N` pour un essai, `--stock-only` pour
+  n'amorcer que les articles qui ont du stock, `--csv=` pour la trace article par article.
+
+Effet mesuré sur la copie locale : **8 891 articles amorcés**, dont 442 ont du stock — soit
+**52 278 € de valorisation rendue au stock**. La part du chiffre d'affaires 2026 dont le coût est
+connu passe de **84,7 % à 94,1 %**, ce qui rend le PMP utilisable comme base de calcul de marge
+sans attendre que chaque article repasse en réception.
+
+**Ce que le script ne fait pas** : il ne touche pas aux articles dont le PMP a été construit par un
+achat réel, et il ne corrige pas les corrections de stock du module. Celles-ci étaient soupçonnées
+d'écraser le PMP — vérification faite, **elles ne le font pas** : une entrée à prix nul laisse le PMP
+inchangé, le cœur s'en protège (`$newpmp = $oldpmp`).
+
 ## [0.39.5] — 2026-09-25
 
 - `scripts/realign_kit_status.php` : remet chaque produit composé d'accord avec ses composants —
