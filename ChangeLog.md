@@ -6,6 +6,77 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.41.0] — 2026-10-06
+
+### Ajouté — Les structures classées « Particulier » retrouvent leur type
+
+Un compte de la boutique devient un tiers « Particulier », quoi que son titulaire ait saisi dans le
+champ « société ». Sur 147 380 particuliers ayant un contact, 19 878 portent ainsi un nom qui n'est
+pas celui de ce contact, et ce sont deux populations sans rapport :
+
+- environ **3 800 structures ou assimilées** — « AERO-CLUB RHONE-ALPIN », contact « HENRY Luc » ;
+- **16 312 fiches de robots** — tiers « hZecECAfJOkaB », contact « xvBEzChekrfa UMlmTeEvJaZjsS » :
+  des inscriptions automatiques de 2023 à 2025, soit 10,9 % des particuliers, sans une seule pièce.
+
+Le type n'est pas une étiquette : sur un particulier, la fiche propose un nom, un prénom et une date
+de naissance, et la synchronisation de la boutique recompose le nom du tiers depuis son contact.
+
+`scripts/requalify_private_structures.php` ne se fie qu'à Dolibarr et range chaque fiche dans l'un
+de trois lots :
+
+1. **Structures classées** (809) : le nom porte un mot sans équivoque — « aéro-club », une forme
+   juridique, « mairie », « association ». Leur type est corrigé avec `--confirm` : 401 aéro-clubs,
+   335 sociétés, 20 administrations, 53 associations et assimilées.
+2. **Structures à relire** (2 986, dont 1 099 facturées depuis 2024) : rien n'est écrit. Un CSV trié
+   par chiffre d'affaires récent, avec un indice et une colonne à remplir.
+3. **Fiches de robots** (16 312) : rien n'est écrit non plus. Un CSV, pour décider de leur sort.
+
+Trois précautions, toutes nées de l'examen du premier jet :
+
+- **l'employeur n'est pas la structure**. « ENAC », « DGAC », « Armée de l'air », « Airbus » sont
+  portés par des dizaines de fiches : autant d'élèves, d'agents et de salariés qui ont déclaré leur
+  école ou leur employeur comme société. Ces mots ne classent plus, et un nom porté par trois fiches
+  ou plus part à la relecture même s'il contient « SAS » ;
+- **« PAS DE SOCIETE » n'est pas une société** : non plus que « Particulier », « Néant », « Monsieur »
+  ou « Testing ». Ces réponses au champ « société » sont signalées comme telles ;
+- **les mots du contact sortent du nom** avant toute recherche : « DE SA Maria » ne porte pas la
+  forme juridique « SA ».
+
+Un robot se reconnaît à une chaîne tirée au hasard — un mot unique d'au moins six lettres où une
+minuscule précède une majuscule — portée par le nom du tiers **et** par celui du contact, sur une
+fiche sans aucune pièce. Le nom seul ne suffit pas : « AirWax » et « ArmorSky » sont de vrais clients.
+
+Écriture en UPDATE ciblé sur `fk_typent`, sans `Societe::update()` — huit cents événements et autant
+de propagations vers la boutique pour un champ qu'elle ignore. Chaque fiche touchée reçoit
+l'horodatage de la passe dans `import_key`, et le script affiche la commande qui la défait.
+**Quatorze caractères, pas un de plus** : c'est la largeur de la colonne, et une clé plus longue
+était tronquée sans bruit — la commande d'annulation ne retrouvait alors rien.
+
+### Ajouté — Les adresses de la boutique retrouvent leur contact
+
+PrestaSync ne relie une adresse de la boutique à un contact Dolibarr qu'au passage d'une commande.
+Les contacts repris de l'ancien ERP n'ont donc aucune liaison : **910 adresses liées sur 148 453**.
+Deux conséquences — une adresse modifiée en ligne n'est pas reportée (aeropresta 0.36.0 ne sait pas
+sur quel contact écrire), et **chaque ancien client qui recommande reçoit le doublon de son propre
+contact**, PrestaSync ne reconnaissant pas son adresse.
+
+`scripts/link_shop_addresses.php` lit les adresses par le webservice de la boutique — 161 810 en une
+minute — et relie celles dont **un seul contact actif et libre du tiers porte la même rue et le même
+code postal**, à condition qu'elle soit aussi la seule adresse du compte à les porter. D'abord à
+l'espace et à la casse près, puis en ignorant accents et ponctuation.
+
+En local : **127 102 liaisons**. Le reste est laissé tel quel, parce que le relier demanderait de
+deviner : 7 351 adresses en double sur un même compte (« Mon adresse / Mon adresse »), 3 608 cas
+« une adresse, un contact, mais différentes » (code postal tronqué, « Default value »), 197 adresses
+portées par plusieurs contacts, 9 285 inconnues de Dolibarr.
+
+Au passage, le libellé de l'adresse, sa société et son n° de TVA sont posés sur le contact, **là où
+ils sont vides seulement**. Aucun contact n'est modifié : on pose un lien, on ne recopie rien.
+
+Tout est lu avant que rien ne soit écrit, et l'écriture tient en une transaction. La trace CSV est
+obligatoire avec `--confirm` : elle liste chaque liaison, que l'horodatage de la passe permet de
+défaire d'une commande.
+
 ## [0.40.0] — 2026-10-05
 
 ### Ajouté — Le PMP des articles jamais achetés dans Dolibarr
