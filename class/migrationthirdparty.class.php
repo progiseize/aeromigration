@@ -208,7 +208,7 @@ class MigrationThirdparty extends AeroMigrationRunner
         'aeroclub'         => 'TE_AEROCLUB',
         'etablissement'    => 'TE_ETAB',
         'administration'   => 'TE_ADMIN',
-        'association'      => 'TE_OTHER',
+        'association'      => 'TE_ASSO',
     );
 
     /**

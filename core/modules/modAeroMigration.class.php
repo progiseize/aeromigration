@@ -36,7 +36,7 @@ class modAeroMigration extends DolibarrModules
         $this->module_position = '91';
         $this->name            = preg_replace('/^mod/i', '', get_class($this));
         $this->description     = 'Reprise de données de l\'ancien ERP vers Dolibarr';
-        $this->version         = '0.41.0';
+        $this->version         = '0.42.0';
         $this->const_name      = 'MAIN_MODULE_'.strtoupper($this->name);
         $this->picto           = 'fa-database_fas_#1A3085';
 
@@ -139,6 +139,9 @@ class modAeroMigration extends DolibarrModules
             'TE_SOCIETE'  => 'Société',
             'TE_AEROCLUB' => 'Aéro-club',
             'TE_ETAB'     => 'Établissement',
+            // Ajouté en 0.42.0. L'ancien ERP qualifiait 598 tiers d'« Association », et la reprise les
+            // avait rangés dans « Autres » faute de mieux : c'est le quatrième type de la clientèle.
+            'TE_ASSO'     => 'Association',
         );
 
         // Point de départ des identifiants : au-delà de la plage utilisée par Dolibarr

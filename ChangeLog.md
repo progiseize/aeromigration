@@ -6,6 +6,83 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.42.0] — 2026-10-06
+
+### Ajouté — Le type « Association »
+
+L'ancien ERP qualifiait 598 tiers d'« Association ». Le dictionnaire de Dolibarr n'a pas ce type, et
+la reprise les avait rangés dans « Autres », faute de mieux. Le type `TE_ASSO` est ajouté à ceux que
+le module crée à son activation, et la reprise y range désormais cette qualité.
+
+`requalify_private_structures.php --other-to-asso` fait passer les 598 fiches existantes dans le
+nouveau type. Passe à part, avec sa propre annulation ; elle ne touche que les fiches sans clé de
+passe, pour ne pas défaire un « Autre » que le client aurait lui-même choisi.
+
+### Ajouté — Le client choisit parmi sept types, et son fichier se relit
+
+Le dictionnaire compte une quinzaine de types — « Grand groupe », « PME/PMI », « TPE »… — dont
+aucun n'a jamais servi ici. Les CSV de requalification n'en proposent que sept : **Administration,
+Aéro-club, Association, Particulier, Revendeur, Société, Autre**. « Revendeur » est le type natif de
+Dolibarr, activé pour l'occasion : la clientèle en compte, l'un de ses tarifs porte ce nom.
+
+Les deux fichiers de structures portent une colonne « type_a_retenir » dont l'en-tête rappelle ces
+valeurs — déjà remplie dans le lot classé d'office, que le client corrige s'il n'est pas d'accord,
+et vide dans le lot à relire. `--types=FICHIER` relit le fichier rendu :
+
+- une ligne vide n'est pas touchée, et « Particulier » dit seulement que la fiche est bien classée ;
+- la saisie est lue avec indulgence — « aéroclub », « AERO-CLUB », « Autres », « asso » — mais une
+  valeur inconnue n'est jamais devinée : elle est signalée avec son numéro de ligne ;
+- le fichier peut revenir d'un tableur avec des virgules ou en Windows-1252, ce qu'écrit Excel.
+
+### Ajouté — Le tarif du tiers tranche
+
+Le niveau de prix d'un tiers a été accordé par le gérant, fiche par fiche : « Aéro-Clubs » ou
+« Revendeur » sur un tiers classé « Particulier » en dit plus que n'importe quel mot de son nom. Le
+client l'a relevé lui-même — un aéro-club au bon tarif, resté « Particulier », dont la Vue 360° ne
+laisse pas corriger le nom (elle montre le nom et le prénom du contact, comme pour toute personne).
+
+Une fiche à l'un de ces deux tarifs prend donc d'office le type correspondant (356 en local : 345
+aéro-clubs, 11 revendeurs), quoi que dise son nom — y compris quand elle porte celui d'une personne,
+le correspondant saisi à la place du club (26 fiches). Une exception : un nom de collectivité garde
+son type — « VILLE DE NIORT » au tarif « Aéro-Clubs » a un tarif de faveur, pas un aéro-club.
+
+Les autres tarifs réservés — « École de pilotage », « Airbus » — ne désignent aucun type : ils
+figurent dans les CSV et restent un indice de relecture (30 fiches).
+
+### Corrigé — Un contact saisi au nom de la structure la faisait passer pour une personne
+
+Tiers « ACBA AEROCLUB », contact « ACBA AEROCLUB » : les deux noms étant identiques, la fiche était
+tenue pour une personne et ne remontait nulle part. Un mot fort dans le nom la signale désormais (35
+en local). Elle part à la relecture avec sa suggestion, et non au classement d'office : « Ligue » et
+« Comité » sont aussi des noms de famille. « Aéroclub », lui, n'est le nom de personne : ces fiches-là
+(12 en local) sont classées.
+
+### Modifié — Un aéro-club reste classé quand trois fiches portent son nom
+
+Un nom porté par trois fiches ou plus part à la relecture — ce sont le plus souvent les salariés d'un
+même employeur. La règle ne vaut plus pour les aéro-clubs (18 fiches en local, six clubs) : leurs
+fiches sont les comptes ouverts au nom du club par ses bénévoles successifs. Le nombre de fiches du
+même nom reste affiché dans le CSV.
+
+### Modifié — Un aéro-club que rien ne confirme part à la relecture
+
+« Aéroclub de Dinard », contact « LEROUX Pierre », une adresse Orange à son nom, une facture de 40 €
+au tarif public : le club, ou un membre qui a cité le sien dans le champ « société » de la boutique ?
+Le nom seul ne le dit pas. Une fiche au nom d'un aéro-club n'est plus classée d'office que si un
+signe la confirme :
+
+- le tarif « Aéro-Clubs », posé par le gérant (251 fiches en local, 13 factures en médiane) ;
+- aucun nom de personne — pas de contact, ou un contact saisi au nom du club ;
+- une adresse e-mail sur un domaine propre, qui ne soit pas celui de la personne ;
+- une boîte grand public au nom du club — « acgranville@orange.fr », « tresorier.acam@gmail.com ».
+
+Les autres (89 en local, une facture en médiane, 11 455 € HT à elles toutes depuis 2024) rejoignent
+le lot à relire avec l'indice « Aéro-club ? (« aeroclub » ; e-mail personnel, tarif public) ». En
+local, tarifs compris : 846 fiches classées, dont 436 aéro-clubs, et 3 032 à relire.
+
+⚠ **Désactiver puis réactiver le module** pour créer le type « Association » (code `TE_ASSO`). Le
+script refuse de tourner tant qu'il manque.
+
 ## [0.41.0] — 2026-10-06
 
 ### Ajouté — Les structures classées « Particulier » retrouvent leur type
