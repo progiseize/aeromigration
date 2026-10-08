@@ -544,7 +544,7 @@ if ($error === '' && $efRows) {
     // quelqu'un aurait saisi entre la lecture et l'écriture.
     // Chaque valeur est ramenée à la taille de sa colonne — garde-fou : une base en mode strict
     // refuse l'excédent, et la passe du 08/10/2026 s'est arrêtée dessus (« Data too long »). La
-    // société est à 255 depuis aerotoolbox 1.63.11, comme sur la boutique ; sur une base qui n'a
+    // société est à 255 depuis aerotoolbox 1.63.12, comme sur la boutique ; sur une base qui n'a
     // pas encore été réactivée, elle serait encore à 128 et la passe échouerait de même.
     $sizes = array('alias' => 128, 'company' => 255, 'vat' => 32);
     $quote = function ($set, $f) use ($db, $sizes) {

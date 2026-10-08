@@ -13,7 +13,7 @@ et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 La première passe en production s'est arrêtée sans rien écrire : « Data too long for column
 'aerotb_ps_company' ». La boutique admet 255 caractères pour la société d'une adresse, l'extrafield
 du contact n'en prenait que 128, et la base de production n'accepte pas l'excédent. La colonne passe
-à 255 avec aerotoolbox 1.63.11 (à réactiver AVANT de relancer la passe) ; le script ramène en outre
+à 255 avec aerotoolbox 1.63.12 (à réactiver AVANT de relancer la passe) ; le script ramène en outre
 chaque valeur à la taille de sa colonne (128, 255 et 32), garde-fou pour la suite.
 
 ## [0.42.0] — 2026-10-06
