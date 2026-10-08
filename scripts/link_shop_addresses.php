@@ -542,8 +542,13 @@ foreach (array_chunk($links, CHUNK) as $chunk) {
 if ($error === '' && $efRows) {
     // Une valeur n'est posée que sur un champ vide : `IF(…, VALUES(col), col)` laisse intact ce que
     // quelqu'un aurait saisi entre la lecture et l'écriture.
-    $quote = function ($set, $f) use ($db) {
-        return isset($set[$f]) ? "'".$db->escape($set[$f])."'" : 'NULL';
+    // Chaque valeur est ramenée à la taille de sa colonne — garde-fou : une base en mode strict
+    // refuse l'excédent, et la passe du 08/10/2026 s'est arrêtée dessus (« Data too long »). La
+    // société est à 255 depuis aerotoolbox 1.63.11, comme sur la boutique ; sur une base qui n'a
+    // pas encore été réactivée, elle serait encore à 128 et la passe échouerait de même.
+    $sizes = array('alias' => 128, 'company' => 255, 'vat' => 32);
+    $quote = function ($set, $f) use ($db, $sizes) {
+        return isset($set[$f]) ? "'".$db->escape(dol_substr(trim((string) $set[$f]), 0, $sizes[$f]))."'" : 'NULL';
     };
     $keep = function ($col) {
         return $col." = IF(COALESCE(".$col.", '') = '' AND VALUES(".$col.") IS NOT NULL, VALUES(".$col."), ".$col.")";
