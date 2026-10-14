@@ -6,6 +6,45 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.43.0] — 2026-10-14
+
+### Ajouté — `renumber_thirdparty_codes.php` : codes tiers au format des pièces
+
+Demande du client : les codes clients et fournisseurs passent au format des pièces, **CL2627-000001**
+et **FOU2627-000001** (préfixe, exercice fiscal, compteur), celui du modèle « Aero » d'aerotoolbox
+1.71.0, avec **un seul bloc CL0219 / FOU0219 pour tout ce qui précède l'exercice 2019-2020**. Le
+script renumérote le parc existant puis active ce modèle.
+
+- **Ordre chronologique** : chaque tiers daté prend l'exercice de sa **première date connue** — la
+  plus ancienne de sa date de création, de sa première facture et de sa première commande (pièces
+  d'achat pour un fournisseur). Le compteur suit cet ordre **sans repartir à zéro** d'un exercice
+  à l'autre, comme le modèle qui prendra la suite.
+- **Les 110 000 comptes au 01/01/2000** : ADD ne datait pas ses comptes avant sa version SQL
+  (28/10/2019) et ses pièces ne remontent qu'à 2015. Leur **numéro de compte ADD**, attribué dans
+  l'ordre de création, sert d'horloge : il ordonne le bloc 0219, et la date d'un compte s'estime
+  sur les premières pièces de ses voisins de numéro. Ainsi les ~6 000 comptes créés d'octobre 2019
+  à décembre 2020 mais restés au 01/01/2000 vont dans leurs exercices 1920 et 2021, et pas dans
+  le bloc 0219 (frontière vers le compte ADD 106 500). Les fournisseurs non datés, que leurs
+  achats (depuis avril 2019 seulement) ne permettent pas de dater, vont dans FOU0219.
+- **L'ancien code est conservé** dans le champ « Ancien code » de la fiche (aerotoolbox 1.71.0), lu
+  par la recherche ; il n'est posé qu'une fois.
+- **Écriture directe** sans trigger ni date de modification touchée : aucune poussée vers la
+  boutique, aucune fiche prise pour modifiée.
+- Simulation par défaut, `--confirm` pour appliquer, `--limit=N` pour un lot d'essai. Rejouable :
+  un tiers déjà à sa cible est ignoré. Le modèle n'est activé qu'après un passage complet sans
+  échec.
+- Refuse de tourner si aerotoolbox 1.71.0 n'a pas été réactivé.
+
+Sur la copie locale : 158 103 clients (CL0219 : 104 116, puis CL1920-104117 … CL2627-158103) et
+397 fournisseurs (FOU0219 : 296) renumérotés, sans échec ; le second passage ne trouve plus rien à
+faire.
+
+### Modifié — Les codes des tiers créés par la reprise suivent la codification en service
+
+`migrationthirdparty` calculait lui-même les codes au format Monkey (pour éviter la relecture de la
+table à chaque création). Quand le modèle « Aero » est en service, il produit désormais des codes
+de la même série.
+
 ## [0.42.1] — 2026-10-08
 
 ### Corrigé — `link_shop_addresses.php` échouait sur une société trop longue

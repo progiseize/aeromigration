@@ -558,6 +558,12 @@ class MigrationThirdparty extends AeroMigrationRunner
         $field  = ($type === 'fournisseur') ? 'code_fournisseur' : 'code_client';
         $prefix = ($type === 'fournisseur') ? $this->codeFournisseurPrefix : $this->codeClientPrefix;
 
+        // Depuis aeromigration 0.43.0, la codification peut être celle d'aerotoolbox (CL2627-000001) :
+        // les codes produits ici doivent alors suivre la même série.
+        if (getDolGlobalString('SOCIETE_CODECLIENT_ADDON') === 'mod_codeclient_aero') {
+            return $this->nextAeroTiersCode($type, $field);
+        }
+
         if ($this->codeCounters[$type] === null) {
             $posindice = strlen($prefix) + 6;
 
@@ -583,6 +589,41 @@ class MigrationThirdparty extends AeroMigrationRunner
         $suffix = ($num >= 100000) ? (string) $num : sprintf('%05d', $num);
 
         return $prefix.dol_print_date(dol_now(), '%y%m', 'tzuserrel').'-'.$suffix;
+    }
+
+    /**
+     * Code tiers suivant au format du modèle « Aero » d'aerotoolbox : préfixe, millésime de
+     * l'exercice fiscal, compteur continu sur la longueur du socle.
+     *
+     * Même principe que pour Monkey : le dernier numéro n'est lu qu'au premier appel, la suite est
+     * tenue en mémoire — le modèle, lui, relirait la table à chaque création.
+     *
+     * @param string $type  'client' ou 'fournisseur'
+     * @param string $field Colonne du code
+     * @return string       Code attribué, chaîne vide si le socle est introuvable ou la lecture échoue
+     */
+    protected function nextAeroTiersCode($type, $field)
+    {
+        if (!dol_include_once('/aerotoolbox/lib/aeronum.lib.php') || !function_exists('aerotb_num_next')) {
+            return '';
+        }
+        $prefix = ($type === 'fournisseur')
+            ? getDolGlobalString('AEROTB_NUM_PREFIX_SUPPLIER', 'FOU')
+            : getDolGlobalString('AEROTB_NUM_PREFIX_CUSTOMER', 'CL');
+
+        if ($this->codeCounters[$type] === null) {
+            $error = '';
+            $next  = aerotb_num_next($this->db, 'societe', $prefix, dol_now(), getEntity('societe'), 'next', $error, '', $field);
+            if (empty($next)) {
+                return '';
+            }
+            $this->codeCounters[$type] = (int) substr((string) $next, strrpos((string) $next, '-') + 1) - 1;
+        }
+
+        $this->codeCounters[$type]++;
+
+        return $prefix.aerotb_num_fiscal_year(dol_now()).'-'
+            .str_pad((string) $this->codeCounters[$type], aerotb_num_counter_length(), '0', STR_PAD_LEFT);
     }
 
     /**
