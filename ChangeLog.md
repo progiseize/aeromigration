@@ -6,6 +6,27 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et le module respecte le [versionnage sémantique](https://semver.org/lang/fr/).
 
 
+## [0.44.0] — 2026-10-15
+
+### Ajouté — `set_default_single_tariff.php` : le tarif unique devient le tarif par défaut
+
+Demande du client : pour tout article qui n'a **qu'un seul tarif fournisseur, même à 0 €**, ce tarif
+est le tarif par défaut — l'étoile d'aerotoolbox (`aerotb_default`), que lisent la Vue 360°,
+l'onglet Prix d'achat, le réappro et la valorisation du stock.
+
+- **Reprise de l'existant seulement** : aucune règle n'est posée à l'écriture, les tarifs saisis
+  ensuite restent au choix du client.
+- Complète `set_default_supplier.php` (le fournisseur principal d'ADD) : les articles visés sont
+  ceux qu'ADD ne désignait pas, ou qu'il ne connaissait pas. Tous comptent, actifs ou non,
+  déclinaisons comprises ; un article déjà étoilé n'est pas touché, le script est rejouable.
+- Écriture par `aerotb_price_default_set()` d'aerotoolbox : une seule étoile par article, ligne
+  d'extrafields créée au besoin, en transaction.
+- Copie locale : 15 275 articles à tarif unique, **426 étoiles à poser, dont 332 sur un tarif à
+  0 €**.
+
+Usage, depuis `custom/aeromigration/scripts` : `php set_default_single_tariff.php` (simulation),
+puis `--confirm` ; `--ref=REF` pour un article, `--limit=N` pour un lot d'essai.
+
 ## [0.43.0] — 2026-10-14
 
 ### Ajouté — `renumber_thirdparty_codes.php` : codes tiers au format des pièces
